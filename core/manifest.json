@@ -1,0 +1,19 @@
+{
+  "name": "antigravity-periodic-model-picker",
+  "version": "1.0",
+  "minNodeVersion": "22.0.0",
+  "files": {
+    "daemon.mjs": {
+      "sha256": "44e619ce7b9f23ad6c3c35c565e96a1a04b23d9abd7db16e2fddd85318cea122",
+      "bytes": 29919
+    },
+    "runtime.js": {
+      "sha256": "3315b97ddd33c08fd17805aef03d4c178d267ddad7a23ef901872b850f5d0c8d",
+      "bytes": 109885
+    },
+    "periodic.css": {
+      "sha256": "07bd6fc0df676785d1845a9f6bcbc72cf699c8efbcb163c4bf2ea76a9d18a927",
+      "bytes": 22927
+    }
+  }
+}

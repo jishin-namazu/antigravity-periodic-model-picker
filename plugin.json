@@ -1,0 +1,12 @@
+{
+  "name": "periodic-model-picker",
+  "displayName": "Model Periodic Table Picker",
+  "version": "1.0",
+  "description": "Periodic table model selector panel for Antigravity Desktop, with theme sync, thinking effort switching, quota view, and custom element mappings.",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Install and verify the Periodic Model Picker panel",
+    "Map a model to an element tile in user/config.json",
+    "Check Periodic Model Picker status and refresh models"
+  ]
+}

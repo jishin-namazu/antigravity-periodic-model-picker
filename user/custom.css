@@ -1,0 +1,11 @@
+/*
+ * user/custom.css — Custom Stylesheet (reloads automatically on save)
+ *
+ * Styles defined here are injected into both the host document (#ag-pt-user-host-style)
+ * and the Periodic Table Shadow DOM (#ag-pt-user-shadow-style).
+ *
+ * Example variable overrides:
+ * :host, .pt-card {
+ *   --pt-card-bg: #1c1d20;
+ * }
+ */

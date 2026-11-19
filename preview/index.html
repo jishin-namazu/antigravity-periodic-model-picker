@@ -1,0 +1,609 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Antigravity · Periodic Model Panel Preview Workbench</title>
+  <style>
+    :root {
+      font-family: "Google Sans", "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #f8f9fa;
+      color: #1f1f23;
+      display: flex;
+      flex-direction: column;
+      transition: background-color 0.16s ease, color 0.16s ease;
+    }
+    body.dark {
+      background: #0e0f12;
+      color: #e8eaed;
+    }
+    .workbench-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 18px;
+      background: rgba(255, 255, 255, 0.88);
+      border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+      font-size: 12.5px;
+      color: #5f6368;
+      z-index: 10;
+    }
+    body.dark .workbench-bar {
+      background: rgba(24, 25, 29, 0.88);
+      border-bottom-color: rgba(255, 255, 255, 0.08);
+      color: #9aa0a6;
+    }
+    .workbench-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .wb-btn {
+      appearance: none;
+      border: 1px solid rgba(128, 134, 139, 0.35);
+      background: transparent;
+      color: inherit;
+      border-radius: 999px;
+      height: 28px;
+      padding: 0 12px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .wb-btn[data-active="1"] {
+      border-color: #1a73e8;
+      background: rgba(26, 115, 232, 0.12);
+      color: #1a73e8;
+    }
+    body.dark .wb-btn[data-active="1"] {
+      border-color: #8ab4f8;
+      background: rgba(138, 180, 248, 0.16);
+      color: #d2e3fc;
+    }
+    .stage {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-end;
+      padding: 24px 20px 26px;
+    }
+    .surface-composer {
+      width: min(760px, calc(100vw - 32px));
+      background: #ffffff;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      border-radius: 24px;
+      padding: 14px 16px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      box-shadow: 0 4px 20px rgba(15, 23, 42, 0.06);
+    }
+    body.dark .surface-composer {
+      background: #1e1f22;
+      border-color: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+    }
+    .editor-row {
+      position: relative;
+      min-height: 24px;
+    }
+    [data-lexical-editor="true"] {
+      outline: none;
+      font-size: 15px;
+      line-height: 24px;
+      min-height: 24px;
+    }
+    .editor-placeholder {
+      position: absolute;
+      top: 0;
+      left: 0;
+      margin: 0;
+      color: #80868b;
+      font-size: 15px;
+      line-height: 24px;
+      pointer-events: none;
+    }
+    .composer-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .host-native-model-btn {
+      appearance: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 28px;
+      padding: 0 8px;
+      border-radius: 8px;
+      border: none;
+      background: transparent;
+      color: inherit;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .host-native-model-btn .effort-muted {
+      opacity: 0.6;
+      font-weight: 400;
+    }
+    /* Simulated Host Native Dropdown Menu (SubmenuTrigger pattern matching Antigravity 2.32+) */
+    #mock-native-menu {
+      position: fixed;
+      left: 160px;
+      bottom: 90px;
+      width: 310px;
+      background: #ffffff;
+      color: #1f1f23;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 12px;
+      padding: 6px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+      z-index: 50;
+    }
+    body.dark #mock-native-menu {
+      background: #202124;
+      color: #e8eaed;
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+    #mock-native-menu[hidden],
+    #mock-effort-submenu[hidden],
+    #mock-usage-dialog[hidden] {
+      display: none !important;
+    }
+    .mock-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: 100%;
+      padding: 7px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      border: none;
+      background: transparent;
+      color: inherit;
+      text-align: left;
+    }
+    .mock-item[data-highlighted],
+    .mock-item:hover {
+      background: rgba(128, 134, 139, 0.14);
+    }
+    .mock-effort-span {
+      margin-left: 6px;
+      opacity: 0.65;
+      font-size: 11.5px;
+    }
+    .mock-badge {
+      margin-left: 5px;
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(26, 115, 232, 0.12);
+      color: #1a73e8;
+    }
+    #mock-effort-submenu {
+      position: fixed;
+      left: 476px;
+      bottom: 180px;
+      width: 150px;
+      background: #ffffff;
+      color: #1f1f23;
+      border: 1px solid rgba(0, 0, 0, 0.12);
+      border-radius: 10px;
+      padding: 4px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+      z-index: 60;
+    }
+    body.dark #mock-effort-submenu {
+      background: #25262a;
+      color: #e8eaed;
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+    #mock-usage-dialog {
+      position: fixed;
+      inset: 50% auto auto 50%;
+      transform: translate(-50%, -50%);
+      background: #ffffff;
+      color: #1f1f23;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      border-radius: 16px;
+      padding: 20px 24px;
+      box-shadow: 0 20px 48px rgba(0, 0, 0, 0.25);
+      z-index: 90;
+    }
+    .status-readout {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: #1a73e8;
+    }
+    body.dark .status-readout {
+      color: #8ab4f8;
+    }
+  </style>
+</head>
+<body class="dark" data-agy-theme="onyx">
+  <div class="workbench-bar">
+    <div>
+      <strong>Periodic Model Picker</strong> · v1.0 Preview
+      <span class="status-readout" id="active-model-readout">[Gemini 4 Carbon · High]</span>
+    </div>
+    <div class="workbench-controls">
+      <button class="wb-btn" id="btn-host-light" type="button">Host Light Mode</button>
+      <button class="wb-btn" id="btn-host-dark" data-active="1" type="button">Host Dark Mode</button>
+      <button class="wb-btn" id="btn-future-models" type="button">+ Future Models</button>
+    </div>
+  </div>
+
+  <main class="stage">
+    <div id="antigravity.agentSidePanelInputBox" class="surface-composer" data-composer="true">
+      <div class="editor-row">
+        <div contenteditable="true" data-lexical-editor="true" id="mock-lexical"><p><br></p></div>
+        <p class="editor-placeholder" id="mock-placeholder">Ask anything, @ to mention, / for actions</p>
+      </div>
+      <div class="composer-footer agy-composer-footer">
+        <div class="footer-left">
+          <span>+</span>
+          <button
+            id="native-model-trigger"
+            class="host-native-model-btn"
+            type="button"
+            data-testid="model-selector-trigger"
+            aria-haspopup="menu"
+            aria-controls="mock-native-menu"
+          ><span>Gemini 4 Carbon</span><span class="effort-muted">High</span></button>
+        </div>
+        <div>Turbo</div>
+      </div>
+    </div>
+  </main>
+
+  <div id="mock-native-menu" role="menu" data-menu-popup="true" hidden></div>
+  <div id="mock-effort-submenu" role="menu" data-menu-popup="true" hidden></div>
+  <div id="mock-usage-dialog" role="dialog" hidden>
+    <strong>Host Native Usage Dialog (Should NOT be opened)</strong>
+    <button type="button" id="close-usage-btn">Close</button>
+  </div>
+
+  <script>
+    window.__AG_PT_PREVIEW_HOST__ = true;
+    try {
+      localStorage.removeItem('ag_periodic_model_catalog_v1');
+      localStorage.removeItem('ag_periodic_model_catalog_v2');
+      localStorage.removeItem('ag_periodic_model_catalog_v3');
+    } catch (e) {}
+
+    // Exact model effort capabilities mirroring Antigravity Language Server GetAvailableModels
+    const MODELS = [
+      { base: 'Gemini 4 Neon', effort: 'Medium', badge: 'New', efforts: ['Low', 'Medium', 'High', 'XHigh'], maxTokens: 1048576, rem: 0.86 },
+      { base: 'Gemini 4 Carbon', effort: 'High', badge: 'New', efforts: ['Low', 'Medium', 'High'], maxTokens: 1048576, rem: 0.78 },
+      { base: 'Gemini 4 Argon', effort: 'Medium', badge: 'New', efforts: ['Low', 'Medium', 'High'], maxTokens: 1048576, rem: 0.92 },
+      { base: 'Gemini 4 Hydrogen', effort: 'Medium', badge: 'New', efforts: ['Low', 'Medium', 'High', 'XHigh'], maxTokens: 1048576, rem: 0.84 },
+      { base: 'Orchestrator (Neon)', effort: null, badge: null, efforts: [], maxTokens: 1048576, rem: 0.86 },
+      { base: 'Orchestrator (Carbon)', effort: null, badge: null, efforts: [], maxTokens: 1048576, rem: 0.78 },
+      { base: 'Orchestrator (Argon)', effort: null, badge: null, efforts: [], maxTokens: 1048576, rem: 0.92 },
+      { base: 'Gemini 3.8 Flash', effort: 'Medium', badge: 'Fast', efforts: ['Low', 'Medium', 'High'], maxTokens: 1048576, rem: 0.95 },
+      { base: 'Claude Opus 5.5', effort: 'Medium', badge: 'New', efforts: ['Low', 'Medium', 'High'], maxTokens: 204800, rem: 0.64 },
+      { base: 'Claude Sonnet 5.5', effort: 'Medium', badge: 'New', efforts: ['Low', 'Medium', 'High'], maxTokens: 204800, rem: 0.72 },
+      { base: 'GPT-OSS 120B', effort: null, badge: null, efforts: [], maxTokens: 131072, rem: 1.0 }
+    ];
+
+    const FUTURE_MODELS = [
+      { base: 'Gemini 4 Silicon', effort: 'High', badge: 'New', efforts: ['Low', 'Medium', 'High', 'XHigh'], maxTokens: 1048576, rem: 0.91 },
+      { base: 'Gemini 4 Gold', effort: 'XHigh', badge: 'New', efforts: ['Medium', 'High', 'XHigh', 'Max'], maxTokens: 2097152, rem: 0.88 }
+    ];
+
+    let futureEnabled = false;
+    let selectedBase = 'Gemini 4 Carbon';
+    let selectedEffort = 'High';
+    let hoverOpenTimer = null;
+
+    const triggerBtn = document.getElementById('native-model-trigger');
+    const menuEl = document.getElementById('mock-native-menu');
+    const subMenuEl = document.getElementById('mock-effort-submenu');
+    const usageDlg = document.getElementById('mock-usage-dialog');
+    const readoutEl = document.getElementById('active-model-readout');
+    const lexicalEl = document.getElementById('mock-lexical');
+    const placeholderEl = document.getElementById('mock-placeholder');
+
+    lexicalEl.addEventListener('input', () => {
+      placeholderEl.style.display = lexicalEl.textContent.trim() ? 'none' : '';
+    });
+
+    function buildMockBackendPayload() {
+      const list = futureEnabled ? [...MODELS, ...FUTURE_MODELS] : MODELS;
+      const modelCapabilities = {};
+      for (const m of list) {
+        modelCapabilities[m.base.toLowerCase()] = {
+          base: m.base,
+          supportedEfforts: m.efforts.length >= 2 ? m.efforts.slice() : [],
+          singleFixedEffort: null,
+          maxTokens: m.maxTokens,
+          maxOutputTokens: 65536,
+          tagTitle: m.badge || '',
+          remainingFraction: m.rem,
+          resetTime: new Date(Date.now() + 3.6 * 3600 * 1000).toISOString()
+        };
+      }
+      return {
+        fetchedAtMs: Date.now(),
+        modelCapabilities,
+        quota: {
+          description: 'Quotas refresh automatically per sliding window.',
+          groups: [
+            {
+              displayName: 'Gemini Models',
+              description: 'Shared rate & weekly allowance across Gemini 4 element models',
+              buckets: [
+                {
+                  bucketId: 'gem-5h',
+                  displayName: '5-hour window',
+                  window: '5h',
+                  remainingFraction: 0.84,
+                  resetTime: new Date(Date.now() + 3.6 * 3600 * 1000).toISOString()
+                },
+                {
+                  bucketId: 'gem-week',
+                  displayName: 'Weekly allowance',
+                  window: 'weekly',
+                  remainingFraction: 0.78,
+                  resetTime: new Date(Date.now() + 4.3 * 86400 * 1000).toISOString()
+                }
+              ]
+            },
+            {
+              displayName: 'Claude and GPT models',
+              description: 'Third-party partner reasoning models',
+              buckets: [
+                {
+                  bucketId: '3p-5h',
+                  displayName: '5-hour window',
+                  window: '5h',
+                  remainingFraction: 0.68,
+                  resetTime: new Date(Date.now() + 2.2 * 3600 * 1000).toISOString()
+                },
+                {
+                  bucketId: '3p-week',
+                  displayName: 'Weekly allowance',
+                  window: 'weekly',
+                  remainingFraction: 0.31,
+                  resetTime: new Date(Date.now() + 5.1 * 86400 * 1000).toISOString()
+                }
+              ]
+            }
+          ]
+        },
+        account: {
+          tierName: 'Google AI Ultra',
+          upgradeText: '',
+          promptCredits: 2500,
+          flowCredits: 5000
+        }
+      };
+    }
+
+    window.__agPtPreviewFetchBackend = () => {
+      setTimeout(() => {
+        if (typeof window.__ag_pt_receive_backend === 'function') {
+          window.__ag_pt_receive_backend(buildMockBackendPayload());
+        }
+      }, 40);
+    };
+
+    function syncTriggerDisplay() {
+      triggerBtn.innerHTML = selectedEffort
+        ? `<span>${selectedBase}</span><span class="effort-muted">${selectedEffort}</span>`
+        : `<span>${selectedBase}</span>`;
+      readoutEl.textContent = selectedEffort
+        ? `[${selectedBase} · ${selectedEffort}]`
+        : `[${selectedBase}]`;
+    }
+
+    function openEffortSubmenu(modelObj) {
+      if (!modelObj || !modelObj.efforts || modelObj.efforts.length < 2) {
+        subMenuEl.hidden = true;
+        return;
+      }
+      subMenuEl.textContent = '';
+      for (const eff of modelObj.efforts) {
+        const opt = document.createElement('div');
+        opt.className = 'mock-item';
+        opt.setAttribute('role', 'menuitemradio');
+        opt.setAttribute('tabindex', '-1');
+        // Adjacent spans without whitespace to mirror real React submenu item DOM
+        opt.innerHTML = `<span>${eff}</span><span style="opacity:0.5;font-size:11px;">${eff === modelObj.effort ? 'Current' : ''}</span>`;
+        opt.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          modelObj.effort = eff;
+          selectedBase = modelObj.base;
+          selectedEffort = eff;
+          syncTriggerDisplay();
+          closeMockMenu();
+        });
+        subMenuEl.appendChild(opt);
+      }
+      subMenuEl.hidden = false;
+    }
+
+    function renderMockMenu() {
+      menuEl.textContent = '';
+      const list = futureEnabled ? [...MODELS, ...FUTURE_MODELS] : MODELS;
+      for (const m of list) {
+        const row = document.createElement('div');
+        row.className = 'mock-item';
+        row.setAttribute('role', 'menuitem');
+        row.setAttribute('tabindex', '-1');
+
+        // Plain spans (NO inner <button>) — clicking row directly selects & closes menu!
+        const left = document.createElement('div');
+        const nameSpan = document.createElement('span');
+        nameSpan.textContent = m.base;
+        left.appendChild(nameSpan);
+
+        if (m.efforts.length >= 2 && m.effort) {
+          const effSpan = document.createElement('span');
+          effSpan.className = 'mock-effort-span';
+          effSpan.textContent = m.effort;
+          left.appendChild(effSpan);
+        }
+
+        if (m.badge) {
+          const b = document.createElement('span');
+          b.className = 'mock-badge';
+          b.textContent = m.badge;
+          left.appendChild(b);
+        }
+
+        row.appendChild(left);
+
+        if (m.efforts.length >= 2) {
+          row.setAttribute('aria-haspopup', 'menu');
+          const arrow = document.createElement('span');
+          arrow.setAttribute('aria-hidden', 'true');
+          arrow.textContent = '›';
+          row.appendChild(arrow);
+
+          row.addEventListener('pointermove', () => {
+            row.setAttribute('data-highlighted', '');
+            if (hoverOpenTimer) clearTimeout(hoverOpenTimer);
+            hoverOpenTimer = setTimeout(() => {
+              if (!menuEl.hidden) openEffortSubmenu(m);
+            }, 90);
+          });
+
+          row.addEventListener('keydown', (ev) => {
+            if (ev.key === 'ArrowRight') {
+              ev.preventDefault();
+              openEffortSubmenu(m);
+            } else if (ev.key === 'ArrowLeft') {
+              ev.preventDefault();
+              subMenuEl.hidden = true;
+            }
+          });
+        }
+
+        // Clicking row directly commits at current effort and closes menu (just like real Antigravity!)
+        row.addEventListener('click', () => {
+          selectedBase = m.base;
+          selectedEffort = m.efforts.length >= 2 ? m.effort : null;
+          syncTriggerDisplay();
+          closeMockMenu();
+        });
+        menuEl.appendChild(row);
+      }
+
+      const usageRow = document.createElement('div');
+      usageRow.className = 'mock-item';
+      usageRow.setAttribute('role', 'menuitem');
+      usageRow.innerHTML = '<span>View Usage</span>';
+      usageRow.addEventListener('click', () => {
+        closeMockMenu();
+        usageDlg.hidden = false;
+      });
+      menuEl.appendChild(usageRow);
+    }
+
+    function openMockMenu() {
+      renderMockMenu();
+      menuEl.hidden = false;
+      triggerBtn.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeMockMenu() {
+      if (hoverOpenTimer) {
+        clearTimeout(hoverOpenTimer);
+        hoverOpenTimer = null;
+      }
+      menuEl.hidden = true;
+      subMenuEl.hidden = true;
+      triggerBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    triggerBtn.addEventListener('click', () => {
+      if (menuEl.hidden) openMockMenu();
+      else closeMockMenu();
+    });
+
+    document.getElementById('close-usage-btn').addEventListener('click', () => {
+      usageDlg.hidden = true;
+    });
+
+    document.getElementById('btn-host-light').addEventListener('click', (e) => {
+      document.body.classList.remove('dark');
+      document.body.classList.add('light');
+      e.currentTarget.setAttribute('data-active', '1');
+      document.getElementById('btn-host-dark').removeAttribute('data-active');
+    });
+
+    document.getElementById('btn-host-dark').addEventListener('click', (e) => {
+      document.body.classList.remove('light');
+      document.body.classList.add('dark');
+      e.currentTarget.setAttribute('data-active', '1');
+      document.getElementById('btn-host-light').removeAttribute('data-active');
+    });
+
+    document.getElementById('btn-future-models').addEventListener('click', async (e) => {
+      futureEnabled = !futureEnabled;
+      if (futureEnabled) e.currentTarget.setAttribute('data-active', '1');
+      else e.currentTarget.removeAttribute('data-active');
+      if (window.__ag_pt_api) {
+        window.__ag_pt_api.close();
+        await window.__ag_pt_api.refreshCatalog();
+        await window.__ag_pt_api.open(triggerBtn);
+      }
+    });
+
+    async function bootPreview() {
+      const [cssRes, jsRes, cfgRes] = await Promise.all([
+        fetch('../core/periodic.css'),
+        fetch('../core/runtime.js'),
+        fetch('../user/config.json')
+      ]);
+      const [cssText, runtimeTemplate, userCfg] = await Promise.all([
+        cssRes.text(),
+        jsRes.text(),
+        cfgRes.json()
+      ]);
+
+      const payload = {
+        version: '1.0-preview',
+        platform: 'win32',
+        enabled: true,
+        cssText,
+        customCss: '',
+        modules: userCfg.modules || {},
+        config: userCfg,
+        backendData: buildMockBackendPayload(),
+        customJs: ''
+      };
+
+      const executable = runtimeTemplate.replace(
+        '})(__AG_PT_BOOT_PAYLOAD__);',
+        () => `})(${JSON.stringify(payload)});`
+      );
+      (0, eval)(executable);
+    }
+
+    bootPreview().then(() => {
+      setTimeout(() => {
+        if (window.__ag_pt_api) window.__ag_pt_api.open(triggerBtn);
+      }, 100);
+    });
+  </script>
+</body>
+</html>

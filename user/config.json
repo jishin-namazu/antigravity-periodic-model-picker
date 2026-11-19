@@ -1,0 +1,23 @@
+{
+  "configVersion": 3,
+  "enabled": true,
+  "channel": "auto",
+  "periodicTheme": "auto",
+  "closeOnSelect": "effort",
+  "shortcut": "Alt+M",
+  "defaultSeedElements": [
+    "Hydrogen",
+    "Carbon",
+    "Neon",
+    "Argon"
+  ],
+  "defaultSeedOtherModels": [],
+  "modules": {
+    "periodicPicker": true,
+    "keyboardShortcut": true,
+    "customCss": true,
+    "customJs": true
+  },
+  "customElementMappings": {},
+  "extraOtherModels": []
+}
