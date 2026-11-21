@@ -2293,27 +2293,36 @@
   let popoverEl = null;
   let shadowRoot = null;
   let cardEl = null;
-  let headerTitleEl = null;
+  let tableTitlePaneEl = null;
+  let usageTitlePaneEl = null;
   let tierBadgeEl = null;
+  let usageHeaderActionsEl = null;
   let backNavBtnEl = null;
   let refreshUsageBtnEl = null;
+  let tablePaneEl = null;
   let heroTitleEl = null;
   let releasedCountTextEl = null;
   let inspectorEl = null;
   let inspectorNameEl = null;
   let effortGroupEl = null;
+  let footerEl = null;
+  let footerOtherPaneEl = null;
   let otherPillsWrapEl = null;
   let subModelBarEl = null;
+  let subModelBackBtnEl = null;
   let subModelLabelEl = null;
   let subModelListEl = null;
   let subModelDividerEl = null;
   let subModelEffortsEl = null;
   let viewUsageBtnEl = null;
+  let viewUsageLabelEl = null;
   let usageViewEl = null;
+  let usageBodyEl = null;
   const tileBtnByZ = new Map();
   let activeTriggerBtn = null;
   let hoverIntentTimer = null;
   let lockedSelection = null; // { isElement: true, elementZ } | { isElement: false, familyKey, subModelKey? } | null
+  let subModelBarDismissed = false;
 
   function isPanelOpen() {
     if (!popoverEl || !popoverEl.isConnected) return false;
@@ -2331,6 +2340,7 @@
       hoverIntentTimer = null;
     }
     lockedSelection = null;
+    subModelBarDismissed = false;
     if (!popoverEl || !isPanelOpen()) return;
     try {
       if (SUPPORTS_NATIVE_POPOVER) {
@@ -2430,23 +2440,55 @@
     const isUsage = viewName === 'usage';
     cardEl.setAttribute('data-view', isUsage ? 'usage' : 'table');
 
-    if (headerTitleEl) {
-      headerTitleEl.textContent = isUsage ? 'Usage' : 'Model periodic table';
+    if (tableTitlePaneEl) {
+      tableTitlePaneEl.inert = isUsage;
+      if (isUsage) {
+        tableTitlePaneEl.setAttribute('aria-hidden', 'true');
+      } else {
+        tableTitlePaneEl.removeAttribute('aria-hidden');
+      }
     }
-    if (backNavBtnEl) {
-      backNavBtnEl.style.display = isUsage ? 'inline-flex' : 'none';
+    if (usageTitlePaneEl) {
+      usageTitlePaneEl.inert = !isUsage;
+      if (isUsage) {
+        usageTitlePaneEl.removeAttribute('aria-hidden');
+      } else {
+        usageTitlePaneEl.setAttribute('aria-hidden', 'true');
+      }
     }
-    if (refreshUsageBtnEl) {
-      refreshUsageBtnEl.style.display = isUsage ? 'inline-flex' : 'none';
+    if (usageHeaderActionsEl) {
+      usageHeaderActionsEl.inert = !isUsage;
+      if (isUsage) {
+        usageHeaderActionsEl.removeAttribute('aria-hidden');
+      } else {
+        usageHeaderActionsEl.setAttribute('aria-hidden', 'true');
+      }
+    }
+    if (tablePaneEl) {
+      tablePaneEl.inert = isUsage;
+      if (isUsage) {
+        tablePaneEl.setAttribute('aria-hidden', 'true');
+      } else {
+        tablePaneEl.removeAttribute('aria-hidden');
+      }
+    }
+    if (usageViewEl) {
+      usageViewEl.inert = !isUsage;
+      if (isUsage) {
+        usageViewEl.removeAttribute('aria-hidden');
+      } else {
+        usageViewEl.setAttribute('aria-hidden', 'true');
+      }
     }
 
     const tierName = backendState.data?.account?.tierName || '';
     if (tierBadgeEl) {
-      if (isUsage && tierName) {
+      if (tierName) {
         tierBadgeEl.textContent = tierName;
-        tierBadgeEl.style.display = 'inline-flex';
+        tierBadgeEl.setAttribute('data-has-tier', '1');
       } else {
-        tierBadgeEl.style.display = 'none';
+        tierBadgeEl.textContent = '';
+        tierBadgeEl.removeAttribute('data-has-tier');
       }
     }
 
@@ -2456,23 +2498,20 @@
     } else {
       refreshPanelState();
     }
-
-    requestAnimationFrame(() => {
-      positionPanelNearTrigger(activeTriggerBtn);
-    });
   }
 
   function renderNativeUsageView() {
-    if (!usageViewEl) return;
-    usageViewEl.textContent = '';
+    if (!usageBodyEl) return;
+    usageBodyEl.textContent = '';
 
     const tierName = backendState.data?.account?.tierName || '';
     if (tierBadgeEl) {
-      if (cardEl && cardEl.getAttribute('data-view') === 'usage' && tierName) {
+      if (tierName) {
         tierBadgeEl.textContent = tierName;
-        tierBadgeEl.style.display = 'inline-flex';
+        tierBadgeEl.setAttribute('data-has-tier', '1');
       } else {
-        tierBadgeEl.style.display = 'none';
+        tierBadgeEl.textContent = '';
+        tierBadgeEl.removeAttribute('data-has-tier');
       }
     }
     if (refreshUsageBtnEl) {
@@ -2558,7 +2597,7 @@
       groupsWrap.appendChild(infoCard);
     }
 
-    usageViewEl.appendChild(groupsWrap);
+    usageBodyEl.appendChild(groupsWrap);
   }
 
   function setInspectorTitleStrong(prefixTitle, suffixText = '') {
@@ -2600,17 +2639,27 @@
   }
 
   function renderSubModelBar(fam, activeParsed = null) {
-    if (!subModelBarEl || !subModelLabelEl || !subModelListEl || !subModelDividerEl || !subModelEffortsEl) return;
+    if (
+      !footerEl ||
+      !footerOtherPaneEl ||
+      !subModelBarEl ||
+      !subModelLabelEl ||
+      !subModelListEl ||
+      !subModelDividerEl ||
+      !subModelEffortsEl
+    ) {
+      return;
+    }
 
-    const wasOpen = subModelBarEl.getAttribute('data-open') === '1';
     const hasSubs = Boolean(fam && Array.isArray(fam.subModels) && fam.subModels.length > 0);
     if (!hasSubs) {
-      subModelBarEl.removeAttribute('data-open');
-      subModelListEl.textContent = '';
-      subModelEffortsEl.textContent = '';
-      if (wasOpen && isPanelOpen()) {
-        requestAnimationFrame(() => positionPanelNearTrigger(activeTriggerBtn));
-      }
+      // Keep the previously rendered submodel chips intact while the CSS opacity/translate exit runs;
+      // inert + aria-hidden immediately exclude the inactive pane from interaction and focus order.
+      footerEl.setAttribute('data-mode', 'other');
+      footerOtherPaneEl.inert = false;
+      footerOtherPaneEl.removeAttribute('aria-hidden');
+      subModelBarEl.inert = true;
+      subModelBarEl.setAttribute('aria-hidden', 'true');
       return;
     }
 
@@ -2638,6 +2687,7 @@
 
       chip.addEventListener('click', async (ev) => {
         ev.stopPropagation();
+        subModelBarDismissed = false;
         const mode = resolveCloseMode();
         const subTiers = Array.isArray(sub.supportedEfforts) ? sub.supportedEfforts : [];
         const alreadyLockedOnThisSub = Boolean(
@@ -2731,10 +2781,11 @@
       subModelEffortsEl.style.display = 'none';
     }
 
-    subModelBarEl.setAttribute('data-open', '1');
-    if (!wasOpen && isPanelOpen()) {
-      requestAnimationFrame(() => positionPanelNearTrigger(activeTriggerBtn));
-    }
+    footerEl.setAttribute('data-mode', 'submodel');
+    footerOtherPaneEl.inert = true;
+    footerOtherPaneEl.setAttribute('aria-hidden', 'true');
+    subModelBarEl.inert = false;
+    subModelBarEl.removeAttribute('aria-hidden');
   }
 
   function renderDefaultActiveInspector() {
@@ -2959,34 +3010,48 @@
         <path d="M12 2C12 7.8 16.2 12 22 12C16.2 12 12 16.2 12 22C12 16.2 7.8 12 2 12C7.8 12 12 7.8 12 2Z" fill="url(#agPtSparkleGrad)"/>
       </svg>
     `;
-    headerTitleEl = document.createElement('h2');
-    headerTitleEl.className = 'pt-title';
-    headerTitleEl.textContent = 'Model periodic table';
+    const titleDeck = document.createElement('div');
+    titleDeck.className = 'pt-title-deck';
 
+    tableTitlePaneEl = document.createElement('div');
+    tableTitlePaneEl.className = 'pt-title-pane pt-title-pane-table';
+    const tableTitleEl = document.createElement('h2');
+    tableTitleEl.className = 'pt-title';
+    tableTitleEl.textContent = 'Model periodic table';
+    tableTitlePaneEl.appendChild(tableTitleEl);
+
+    usageTitlePaneEl = document.createElement('div');
+    usageTitlePaneEl.className = 'pt-title-pane pt-title-pane-usage';
+    usageTitlePaneEl.inert = true;
+    usageTitlePaneEl.setAttribute('aria-hidden', 'true');
+    const usageTitleEl = document.createElement('h2');
+    usageTitleEl.className = 'pt-title';
+    usageTitleEl.textContent = 'Usage';
     tierBadgeEl = document.createElement('span');
     tierBadgeEl.className = 'pt-tier-badge';
-    tierBadgeEl.style.display = 'none';
+    const initialTierName = backendState.data?.account?.tierName || '';
+    if (initialTierName) {
+      tierBadgeEl.textContent = initialTierName;
+      tierBadgeEl.setAttribute('data-has-tier', '1');
+    }
+    usageTitlePaneEl.appendChild(usageTitleEl);
+    usageTitlePaneEl.appendChild(tierBadgeEl);
 
-    titleWrap.appendChild(headerTitleEl);
-    titleWrap.appendChild(tierBadgeEl);
+    titleDeck.appendChild(tableTitlePaneEl);
+    titleDeck.appendChild(usageTitlePaneEl);
+    titleWrap.appendChild(titleDeck);
 
     const actionsWrap = document.createElement('div');
     actionsWrap.className = 'pt-header-actions';
 
-    backNavBtnEl = document.createElement('button');
-    backNavBtnEl.type = 'button';
-    backNavBtnEl.className = 'pt-nav-pill';
-    backNavBtnEl.style.display = 'none';
-    backNavBtnEl.textContent = '← Periodic Table';
-    backNavBtnEl.addEventListener('click', (ev) => {
-      ev.stopPropagation();
-      switchCardView('table');
-    });
+    usageHeaderActionsEl = document.createElement('div');
+    usageHeaderActionsEl.className = 'pt-usage-header-actions';
+    usageHeaderActionsEl.inert = true;
+    usageHeaderActionsEl.setAttribute('aria-hidden', 'true');
 
     refreshUsageBtnEl = document.createElement('button');
     refreshUsageBtnEl.type = 'button';
     refreshUsageBtnEl.className = 'pt-nav-pill';
-    refreshUsageBtnEl.style.display = 'none';
     refreshUsageBtnEl.textContent = '↻ Refresh';
     refreshUsageBtnEl.addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -3007,8 +3072,8 @@
       closePeriodicPanel();
     });
 
-    actionsWrap.appendChild(backNavBtnEl);
-    actionsWrap.appendChild(refreshUsageBtnEl);
+    usageHeaderActionsEl.appendChild(refreshUsageBtnEl);
+    actionsWrap.appendChild(usageHeaderActionsEl);
     actionsWrap.appendChild(closeBtn);
 
     header.appendChild(titleWrap);
@@ -3221,19 +3286,52 @@
       }
     });
 
-    cardEl.appendChild(grid);
+    const viewDeck = document.createElement('div');
+    viewDeck.className = 'pt-view-deck';
+
+    tablePaneEl = document.createElement('div');
+    tablePaneEl.className = 'pt-view-pane pt-view-pane-table';
+    tablePaneEl.appendChild(grid);
 
     // Built-In Native Usage & Quota Panel (.pt-usage-view)
     usageViewEl = document.createElement('div');
-    usageViewEl.className = 'pt-usage-view';
-    cardEl.appendChild(usageViewEl);
+    usageViewEl.className = 'pt-view-pane pt-view-pane-usage pt-usage-view';
+    usageViewEl.inert = true;
+    usageViewEl.setAttribute('aria-hidden', 'true');
 
-    // Bottom Footer: Other models + Native View Usage button + Composite Sub-Model Tray
-    const footer = document.createElement('div');
-    footer.className = 'pt-footer';
+    usageBodyEl = document.createElement('div');
+    usageBodyEl.className = 'pt-usage-body';
+    usageViewEl.appendChild(usageBodyEl);
 
-    const footerMain = document.createElement('div');
-    footerMain.className = 'pt-footer-main';
+    const usageFooterEl = document.createElement('div');
+    usageFooterEl.className = 'pt-usage-footer';
+
+    backNavBtnEl = document.createElement('button');
+    backNavBtnEl.type = 'button';
+    backNavBtnEl.className = 'pt-usage-btn pt-usage-back-btn';
+    backNavBtnEl.innerHTML = `
+      <svg class="pt-pill-caret-back" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M7.5 3L4.5 6L7.5 9" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>Periodic Table</span>
+    `;
+    backNavBtnEl.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      switchCardView('table');
+    });
+    usageFooterEl.appendChild(backNavBtnEl);
+    usageViewEl.appendChild(usageFooterEl);
+
+    // Bottom Footer: Single-Cell Grid Deck (Other models <-> Composite Sub-Model Switcher)
+    footerEl = document.createElement('div');
+    footerEl.className = 'pt-footer';
+    footerEl.setAttribute('data-mode', 'other');
+
+    const footerDeck = document.createElement('div');
+    footerDeck.className = 'pt-footer-deck';
+
+    footerOtherPaneEl = document.createElement('div');
+    footerOtherPaneEl.className = 'pt-footer-pane pt-footer-pane-other';
 
     const otherWrap = document.createElement('div');
     otherWrap.className = 'pt-other-wrap';
@@ -3247,21 +3345,65 @@
 
     otherWrap.appendChild(otherLabel);
     otherWrap.appendChild(otherPillsWrapEl);
-    footerMain.appendChild(otherWrap);
+    footerOtherPaneEl.appendChild(otherWrap);
 
     viewUsageBtnEl = document.createElement('button');
     viewUsageBtnEl.type = 'button';
     viewUsageBtnEl.className = 'pt-usage-btn';
-    viewUsageBtnEl.textContent = 'View Usage';
+    viewUsageLabelEl = document.createElement('span');
+    viewUsageLabelEl.textContent = 'View Usage';
+    viewUsageBtnEl.appendChild(viewUsageLabelEl);
+    {
+      const caret = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      caret.setAttribute('class', 'pt-pill-caret');
+      caret.setAttribute('viewBox', '0 0 12 12');
+      caret.setAttribute('fill', 'none');
+      caret.setAttribute('aria-hidden', 'true');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', 'M4.5 3L7.5 6L4.5 9');
+      path.setAttribute('stroke', 'currentColor');
+      path.setAttribute('stroke-width', '1.4');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+      caret.appendChild(path);
+      viewUsageBtnEl.appendChild(caret);
+    }
     viewUsageBtnEl.addEventListener('click', (ev) => {
       ev.stopPropagation();
       switchCardView('usage');
     });
-    footerMain.appendChild(viewUsageBtnEl);
-    footer.appendChild(footerMain);
+    footerOtherPaneEl.appendChild(viewUsageBtnEl);
+    footerDeck.appendChild(footerOtherPaneEl);
 
     subModelBarEl = document.createElement('div');
-    subModelBarEl.className = 'pt-submodel-bar';
+    subModelBarEl.className = 'pt-footer-pane pt-footer-pane-submodel';
+    subModelBarEl.inert = true;
+    subModelBarEl.setAttribute('aria-hidden', 'true');
+
+    subModelBackBtnEl = document.createElement('button');
+    subModelBackBtnEl.type = 'button';
+    subModelBackBtnEl.className = 'pt-submodel-back';
+    subModelBackBtnEl.title = 'Back to Other models';
+    subModelBackBtnEl.setAttribute('aria-label', 'Back to Other models');
+    subModelBackBtnEl.innerHTML = `
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M10 3.5L5.5 8L10 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `;
+    subModelBackBtnEl.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      lockedSelection = null;
+      subModelBarDismissed = true;
+      refreshPanelState();
+      const firstCompositePill =
+        otherPillsWrapEl && otherPillsWrapEl.querySelector('.pt-other-pill[data-has-submodels="1"]');
+      if (firstCompositePill && typeof firstCompositePill.focus === 'function') {
+        try {
+          firstCompositePill.focus({ preventScroll: true });
+        } catch (e) {}
+      }
+    });
+
     subModelLabelEl = document.createElement('span');
     subModelLabelEl.className = 'pt-submodel-label';
     subModelListEl = document.createElement('div');
@@ -3271,13 +3413,18 @@
     subModelEffortsEl = document.createElement('div');
     subModelEffortsEl.className = 'pt-submodel-efforts';
 
+    subModelBarEl.appendChild(subModelBackBtnEl);
     subModelBarEl.appendChild(subModelLabelEl);
     subModelBarEl.appendChild(subModelListEl);
     subModelBarEl.appendChild(subModelDividerEl);
     subModelBarEl.appendChild(subModelEffortsEl);
-    footer.appendChild(subModelBarEl);
+    footerDeck.appendChild(subModelBarEl);
 
-    cardEl.appendChild(footer);
+    footerEl.appendChild(footerDeck);
+    tablePaneEl.appendChild(footerEl);
+    viewDeck.appendChild(tablePaneEl);
+    viewDeck.appendChild(usageViewEl);
+    cardEl.appendChild(viewDeck);
     shadowRoot.appendChild(cardEl);
 
     // 2D Spatial Arrow Key Navigation, Backspace Return & Element Quick-Jump
@@ -3292,6 +3439,13 @@
       if (ev.key === 'Backspace' && cardEl.getAttribute('data-view') === 'usage') {
         ev.preventDefault();
         switchCardView('table');
+        return;
+      }
+      if (ev.key === 'Backspace' && footerEl && footerEl.getAttribute('data-mode') === 'submodel') {
+        ev.preventDefault();
+        lockedSelection = null;
+        subModelBarDismissed = true;
+        refreshPanelState();
         return;
       }
       if (cardEl.getAttribute('data-view') === 'usage') return;
@@ -3422,7 +3576,7 @@
       if (lockedFam && Array.isArray(lockedFam.subModels) && lockedFam.subModels.length > 0) {
         expandedCompositeFam = lockedFam;
       }
-    } else if (!lockedSelection && activeParsed && !activeParsed.isElement) {
+    } else if (!lockedSelection && !subModelBarDismissed && activeParsed && !activeParsed.isElement) {
       const activeFam = catalogState.otherFamilies.get(activeParsed.shortLabel.toLowerCase());
       if (activeFam && Array.isArray(activeFam.subModels) && activeFam.subModels.length > 0) {
         expandedCompositeFam = activeFam;
@@ -3473,7 +3627,7 @@
           caret.setAttribute('fill', 'none');
           caret.setAttribute('aria-hidden', 'true');
           const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-          path.setAttribute('d', 'M3 4.5L6 7.5L9 4.5');
+          path.setAttribute('d', 'M4.5 3L7.5 6L4.5 9');
           path.setAttribute('stroke', 'currentColor');
           path.setAttribute('stroke-width', '1.4');
           path.setAttribute('stroke-linecap', 'round');
@@ -3498,6 +3652,7 @@
           );
 
           if (hasSubModels) {
+            subModelBarDismissed = false;
             if (!alreadyLockedHere) {
               const initialSub = resolveSelectedSubModelForFamily(fam, activeParsed);
               lockedSelection = {
@@ -3573,8 +3728,10 @@
 
     renderSubModelBar(expandedCompositeFam, activeParsed);
 
+    if (viewUsageLabelEl) {
+      viewUsageLabelEl.textContent = catalogState.viewUsageLabel || 'View Usage';
+    }
     if (viewUsageBtnEl) {
-      viewUsageBtnEl.textContent = catalogState.viewUsageLabel || 'View Usage';
       viewUsageBtnEl.style.display = 'inline-flex';
     }
 
@@ -3585,6 +3742,7 @@
     const resolvedTrigger = triggerBtn || findAllModelTriggers()[0] || null;
     activeTriggerBtn = resolvedTrigger;
     lockedSelection = null;
+    subModelBarDismissed = false;
 
     const curRaw = resolvedTrigger ? readRawTriggerModelName(resolvedTrigger) : '';
     seedInitialCatalog(curRaw);
