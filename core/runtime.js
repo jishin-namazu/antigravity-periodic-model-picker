@@ -378,7 +378,7 @@
     return uniq.sort((a, b) => EFFORT_ORDER.indexOf(a) - EFFORT_ORDER.indexOf(b));
   }
 
-  const UI_BADGE_SET = new Set(['new', 'fast', 'beta', 'preview', 'experimental', 'exp', 'default']);
+  const UI_BADGE_SET = new Set(['new', 'fast', 'beta', 'preview', 'experimental', 'exp', 'default', 'notice']);
 
   const RE_USAGE_ACTION = /^(?:View\s+Usage|Models\s*&\s*Usage|Model\s+Usage)$/i;
   const RE_IGNORE_META =
@@ -406,12 +406,12 @@
     let extractedEffort = null;
 
     for (let pass = 0; pass < 2; pass++) {
-      const mSpacedBadge = s.match(/^(.*?)\s+(New|Fast|Beta)$/i);
+      const mSpacedBadge = s.match(/^(.*?)\s+(New|Fast|Beta|Notice)$/i);
       if (mSpacedBadge && mSpacedBadge[1].trim()) {
         s = mSpacedBadge[1].trim();
         continue;
       }
-      const mGluedBadge = s.match(/^(.+[a-z0-9)])(New|Fast|Beta)$/);
+      const mGluedBadge = s.match(/^(.+[a-z0-9)])(New|Fast|Beta|Notice)$/);
       if (mGluedBadge) {
         s = mGluedBadge[1].trim();
       }
@@ -562,9 +562,49 @@
     };
   }
 
+  function parseActiveTriggerState(rawInput) {
+    const rawTrimmed = String(rawInput || '').replace(/\s+/g, ' ').trim();
+    if (!rawTrimmed) return null;
+
+    const orchFam = catalogState.otherFamilies.get('orchestrator');
+    const hasCompositeOrch = Boolean(orchFam && Array.isArray(orchFam.subModels) && orchFam.subModels.length > 0);
+    const mOrch = rawTrimmed.match(/^Orchestrator(?:\s*[·•:\-]\s*|\s+(.+))?$/i);
+    if (mOrch) {
+      const remainder = (mOrch[1] || '').trim();
+      const isFlatParenVariant = /^\([^)]+\)$/.test(remainder);
+      if (hasCompositeOrch || !remainder || !isFlatParenVariant) {
+        let subCandidate = remainder.replace(/^\((.+)\)$/, '$1').trim();
+        let subBase = null;
+        let subEffort = null;
+        if (subCandidate) {
+          const stripped = stripGluedBadgesAndEffort(subCandidate);
+          subBase = stripped.cleanBase || null;
+          subEffort = stripped.effort || null;
+        }
+        return {
+          raw: 'Orchestrator',
+          base: 'Orchestrator',
+          effort: subEffort,
+          seriesTitle: null,
+          isElement: false,
+          element: null,
+          shortLabel: 'Orchestrator',
+          isComposite: true,
+          familyKey: 'orchestrator',
+          activeSubModelBase: subBase,
+          activeSubModelEffort: subEffort
+        };
+      }
+    }
+
+    return parseModelLabel(rawTrimmed);
+  }
+
   function extractMenuRowInfo(itemEl) {
     if (!itemEl) return null;
 
+    const hasSubmenu = itemEl.getAttribute('aria-haspopup') === 'menu';
+    const orchSubEl = itemEl.querySelector ? itemEl.querySelector('[data-testid*="orchestrator-model"]') : null;
     const explicitVal = itemEl.getAttribute('data-model-value') || itemEl.getAttribute('data-model-label') || '';
     const tokens = [];
     let titleEl = null;
@@ -618,11 +658,45 @@
       return { isUsageAction: true, label: rawCandidate, itemEl };
     }
 
+    // Detect composite nested-model row such as "Orchestrator" -> ["Gemini 4 Neon", "Gemini 4 Carbon", ...]
+    if (orchSubEl || (/^orchestrator$/i.test(rawCandidate) && (hasSubmenu || tokens.length >= 2))) {
+      const subRaw = orchSubEl
+        ? String(orchSubEl.textContent || '').replace(/\s+/g, ' ').trim()
+        : tokens.slice(1).join(' ').trim();
+      const subParsed = subRaw ? stripGluedBadgesAndEffort(subRaw) : { cleanBase: '', effort: null };
+      const parsedComposite = {
+        raw: 'Orchestrator',
+        base: 'Orchestrator',
+        effort: null,
+        seriesTitle: null,
+        isElement: false,
+        element: null,
+        shortLabel: 'Orchestrator',
+        isComposite: true,
+        activeSubModelBase: subParsed.cleanBase || null,
+        activeSubModelEffort: subParsed.effort || null
+      };
+      return {
+        isUsageAction: false,
+        isComposite: true,
+        hasSubmenu,
+        parsed: parsedComposite,
+        currentEffort: null,
+        hasEffortIndicator: false,
+        effortCtrlEl: null,
+        effortBadgeEl: null,
+        titleEl: titleEl || itemEl,
+        itemEl
+      };
+    }
+
     const parsed = parseModelLabel(rawCandidate, detectedEffort);
     if (!parsed) return null;
 
     return {
       isUsageAction: false,
+      isComposite: false,
+      hasSubmenu,
       parsed,
       currentEffort: parsed.effort,
       hasEffortIndicator: Boolean(effortCtrlEl || effortBadgeEl || parsed.effort),
@@ -794,7 +868,7 @@
   // ==========================================================================
   // 5. Backend Capability Bridge, Exact Effort Tiers & Model Catalog
   // ==========================================================================
-  const CACHE_STORAGE_KEY = 'ag_periodic_model_catalog_v3';
+  const CACHE_STORAGE_KEY = 'ag_periodic_model_catalog_v4';
 
   const backendState = {
     data: boot.backendData && typeof boot.backendData === 'object' ? boot.backendData : null,
@@ -807,10 +881,30 @@
     viewUsageLabel: 'View Usage',
     preferredEffortByZ: new Map(), // Z -> effort string
     preferredEffortByOtherKey: new Map(), // familyKey -> effort string
+    preferredSubEffortByKey: new Map(), // `${familyKey}::${subKey}` -> effort string
     probedEffortsByBase: new Map(), // lower(base) -> string[] (exact probed tiers)
     elementEntries: new Map(), // Z -> { element, seriesTitle, base, hasEffortControl, currentEffort, supportedEfforts, variants }
-    otherFamilies: new Map() // familyKey -> { key, shortLabel, base, hasEffortControl, currentEffort, supportedEfforts, variants }
+    otherFamilies: new Map() // familyKey -> { key, shortLabel, base, hasEffortControl, currentEffort, supportedEfforts, variants, subModels, activeSubModelKey }
   };
+
+  function matchSubModelInFamily(fam, hintOrBase) {
+    if (!fam || !Array.isArray(fam.subModels) || fam.subModels.length === 0) return null;
+    if (!hintOrBase) return null;
+    const raw = String(hintOrBase).replace(/\s+/g, ' ').trim().toLowerCase();
+    if (!raw) return null;
+    const exact = fam.subModels.find(
+      (s) => s.key === raw || s.base.toLowerCase() === raw || s.shortLabel.toLowerCase() === raw
+    );
+    if (exact) return exact;
+    return (
+      fam.subModels.find(
+        (s) =>
+          s.base.toLowerCase().includes(raw) ||
+          raw.includes(s.base.toLowerCase()) ||
+          s.shortLabel.toLowerCase().includes(raw)
+      ) || null
+    );
+  }
 
   function hasAuthoritativeBackendCaps() {
     const caps = backendState.data && backendState.data.modelCapabilities;
@@ -853,6 +947,13 @@
       const tiers = resolveVerifiedEffortsForBase(fam.base, varEffs);
       fam.supportedEfforts = tiers;
       fam.hasEffortControl = tiers.length >= 2;
+      if (Array.isArray(fam.subModels)) {
+        for (const sub of fam.subModels) {
+          const subTiers = resolveVerifiedEffortsForBase(sub.base, sub.supportedEfforts || []);
+          sub.supportedEfforts = subTiers;
+          sub.hasEffortControl = subTiers.length >= 2;
+        }
+      }
     }
   }
 
@@ -879,7 +980,18 @@
           shortLabel: fam.shortLabel,
           base: fam.base,
           currentEffort: fam.currentEffort,
-          supportedEfforts: Array.isArray(fam.supportedEfforts) ? fam.supportedEfforts : []
+          supportedEfforts: Array.isArray(fam.supportedEfforts) ? fam.supportedEfforts : [],
+          activeSubModelKey: fam.activeSubModelKey || null,
+          subModels: Array.isArray(fam.subModels)
+            ? fam.subModels.map((sub) => ({
+                key: sub.key,
+                base: sub.base,
+                shortLabel: sub.shortLabel,
+                currentEffort: sub.currentEffort || null,
+                hasSubmenu: Boolean(sub.hasSubmenu),
+                supportedEfforts: Array.isArray(sub.supportedEfforts) ? sub.supportedEfforts : []
+              }))
+            : []
         }))
       };
       localStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(snapshot));
@@ -927,6 +1039,22 @@
           if (fam && fam.key) {
             const cachedTiers = sortEffortTiers(fam.supportedEfforts);
             const verified = resolveVerifiedEffortsForBase(fam.base, cachedTiers);
+            const restoredSubs = Array.isArray(fam.subModels)
+              ? fam.subModels
+                  .filter((s) => s && s.base)
+                  .map((s) => {
+                    const sTiers = resolveVerifiedEffortsForBase(s.base, sortEffortTiers(s.supportedEfforts));
+                    return {
+                      key: s.key || s.base.toLowerCase(),
+                      base: s.base,
+                      shortLabel: s.shortLabel || s.base,
+                      currentEffort: normalizeEffortToken(s.currentEffort) || s.currentEffort || null,
+                      hasSubmenu: Boolean(s.hasSubmenu),
+                      supportedEfforts: sTiers,
+                      hasEffortControl: sTiers.length >= 2
+                    };
+                  })
+              : [];
             catalogState.otherFamilies.set(fam.key, {
               key: fam.key,
               shortLabel: fam.shortLabel,
@@ -934,7 +1062,9 @@
               hasEffortControl: verified.length >= 2,
               currentEffort: normalizeEffortToken(fam.currentEffort) || fam.currentEffort || null,
               supportedEfforts: verified,
-              variants: []
+              variants: [],
+              subModels: restoredSubs,
+              activeSubModelKey: fam.activeSubModelKey || (restoredSubs[0] ? restoredSubs[0].key : null)
             });
           }
         }
@@ -984,7 +1114,7 @@
         catalogState.preferredEffortByZ.set(z, parsed.effort);
       }
     } else {
-      const famKey = parsed.shortLabel.toLowerCase();
+      const famKey = (parsed.familyKey || parsed.shortLabel).toLowerCase();
       let fam = catalogState.otherFamilies.get(famKey);
       if (!fam) {
         fam = {
@@ -994,11 +1124,44 @@
           hasEffortControl: false,
           currentEffort: parsed.effort || null,
           supportedEfforts: [],
-          variants: []
+          variants: [],
+          subModels: [],
+          activeSubModelKey: null
         };
         catalogState.otherFamilies.set(famKey, fam);
-      } else if (parsed.effort) {
+      } else if (!parsed.isComposite && parsed.effort) {
         fam.currentEffort = parsed.effort;
+      }
+
+      if (parsed.isComposite) {
+        const subHint = parsed.activeSubModelBase || null;
+        const subEffort = parsed.activeSubModelEffort || parsed.effort || null;
+        if (subHint) {
+          let hit = matchSubModelInFamily(fam, subHint);
+          if (!hit && fam.subModels.length === 0) {
+            const sTiers = resolveVerifiedEffortsForBase(subHint, []);
+            hit = {
+              key: subHint.toLowerCase(),
+              base: subHint,
+              shortLabel: subHint,
+              currentEffort: subEffort,
+              hasSubmenu: sTiers.length >= 2,
+              supportedEfforts: sTiers,
+              hasEffortControl: sTiers.length >= 2
+            };
+            fam.subModels.push(hit);
+          }
+          if (hit) {
+            fam.activeSubModelKey = hit.key;
+            if (subEffort) {
+              hit.currentEffort = subEffort;
+              if (isCurrentActive) {
+                catalogState.preferredSubEffortByKey.set(`${famKey}::${hit.key}`, subEffort);
+              }
+            }
+          }
+        }
+        return;
       }
 
       if (parsed.effort && !fam.variants.some((v) => v.effort === parsed.effort)) {
@@ -1047,7 +1210,7 @@
     }
 
     if (activeRaw) {
-      const activeParsed = parseModelLabel(activeRaw);
+      const activeParsed = parseActiveTriggerState(activeRaw);
       if (activeParsed) {
         registerModelEntry(activeParsed, true);
       }
@@ -1319,11 +1482,12 @@
   }
 
   // Locate an open secondary effort submenu/popover (requiring >= 2 valid effort options in the same container)
-  function findEffortOptionsInSecondaryPopup(mainPopup, mainTopItems, targetEffort = null) {
+  function findEffortOptionsInSecondaryPopup(mainPopup, mainTopItems, targetEffort = null, excludePopups = null) {
     const candidates = document.querySelectorAll(
       '[role="menuitem"], [role="menuitemradio"], [role="option"], .agy-overlay-item, [data-menu-popup] button, [data-select-popup] button, [data-popover-popup] button, [data-radix-popper-content-wrapper] button, [data-floating-ui-portal] button, body > div:not(#ag-periodic-model-popover) button'
     );
 
+    const isExcludedPopup = (p) => Boolean(p && (p === mainPopup || (excludePopups && excludePopups.has(p))));
     const byContainer = new Map(); // containerEl -> Array<{ el, effort }>
 
     for (let i = 0; i < candidates.length; i++) {
@@ -1336,14 +1500,24 @@
       const ownerPopup = el.closest(
         '[data-menu-popup], [data-select-popup], [data-popover-popup], [data-radix-menu-content], [role="menu"], [role="listbox"], .agy-overlay, [data-floating-ui-portal]'
       );
-      if (ownerPopup === mainPopup) continue;
+      if (isExcludedPopup(ownerPopup)) continue;
       if (ownerPopup && !isElementVisible(ownerPopup)) continue;
 
-      // Skip inline elements inside a top-level mainPopup item unless nested inside a separate submenu container
+      // Skip inline elements inside an excluded parent popup unless nested inside a separate submenu container
       if (!ownerPopup && mainPopup && mainPopup.contains(el)) continue;
+      if (!ownerPopup && excludePopups) {
+        let insideExcluded = false;
+        for (const ep of excludePopups) {
+          if (ep && ep.contains && ep.contains(el)) {
+            insideExcluded = true;
+            break;
+          }
+        }
+        if (insideExcluded) continue;
+      }
 
       const containerKey = ownerPopup || el.parentElement;
-      if (!containerKey || containerKey === mainPopup) continue;
+      if (!containerKey || isExcludedPopup(containerKey)) continue;
 
       const norm = extractEffortFromSubmenuOption(el);
       if (!norm) continue;
@@ -1368,7 +1542,7 @@
     }
 
     if (bestGroup.length < 2) {
-      return { containerEl: null, matchedEl: null, discoveredEfforts: [] };
+      return { containerEl: null, matchedEl: null, discoveredEfforts: [], entries: [] };
     }
 
     const discoveredEfforts = sortEffortTiers(bestGroup.map((g) => g.effort));
@@ -1376,16 +1550,56 @@
     return {
       containerEl: bestContainer,
       matchedEl: hit ? hit.el : null,
-      discoveredEfforts
+      discoveredEfforts,
+      entries: bestGroup
     };
   }
 
-  // Highlight a model row and trigger its submenu via hover + ArrowRight without firing click
-  async function openRowEffortSubmenu(popup, row, mainTopItems, targetEffort = null, maxPollFrames = 12) {
-    if (!popup || !row || !row.itemEl || !row.itemEl.isConnected) {
-      return { containerEl: null, matchedEl: null, discoveredEfforts: [] };
+  // Locate an open secondary model-list submenu (e.g. Level-2 models inside "Orchestrator")
+  function findSubmenuItemsInSecondaryPopup(excludePopups, excludeItems) {
+    const popups = document.querySelectorAll(
+      '[data-menu-popup], [data-select-popup], [data-popover-popup], [data-radix-menu-content], [role="menu"], [role="listbox"], .agy-overlay'
+    );
+
+    let bestContainer = null;
+    let bestRows = [];
+
+    for (let i = 0; i < popups.length; i++) {
+      const p = popups[i];
+      if (!isPopupActuallyOpen(p)) continue;
+      if (excludePopups && excludePopups.has(p)) continue;
+
+      const rawItems = getPopupMenuItems(p).filter(
+        (el) =>
+          isElementVisible(el) &&
+          (!excludeItems || !excludeItems.has(el)) &&
+          el.getAttribute('aria-disabled') !== 'true' &&
+          !el.hasAttribute('data-disabled')
+      );
+      if (rawItems.length === 0) continue;
+
+      // Ignore pure effort-only popups (those belong to Level-3 effort picker, not sub-model lists)
+      const effortCount = rawItems.filter((el) => Boolean(extractEffortFromSubmenuOption(el))).length;
+      if (effortCount === rawItems.length) continue;
+
+      const parsedRows = [];
+      for (const el of rawItems) {
+        const info = extractMenuRowInfo(el);
+        if (info && !info.isUsageAction && info.parsed && info.parsed.base) {
+          parsedRows.push(info);
+        }
+      }
+
+      if (parsedRows.length > bestRows.length) {
+        bestContainer = p;
+        bestRows = parsedRows;
+      }
     }
 
+    return { containerEl: bestContainer, rows: bestRows };
+  }
+
+  async function highlightAndArrowRightRow(parentPopup, row, parentItemsSet) {
     syntheticHoverHighlight(row.itemEl);
     await waitNextFrames(1);
 
@@ -1395,26 +1609,62 @@
       document.activeElement === row.itemEl;
 
     if (!isRowHighlighted()) {
-      const allItems = Array.from(mainTopItems || []);
+      const allItems = Array.from(parentItemsSet || []);
       const maxSteps = Math.min(24, allItems.length + 2);
       for (let s = 0; s < maxSteps; s++) {
         const keyReceiver =
-          document.activeElement && popup.contains(document.activeElement) ? document.activeElement : popup;
+          document.activeElement && parentPopup.contains(document.activeElement)
+            ? document.activeElement
+            : parentPopup;
         dispatchMenuKey(keyReceiver, 'ArrowDown', 40);
         if (isRowHighlighted()) break;
       }
     }
 
     const arrowTarget =
-      document.activeElement && popup.contains(document.activeElement) ? document.activeElement : row.itemEl;
+      document.activeElement && parentPopup.contains(document.activeElement) ? document.activeElement : row.itemEl;
     dispatchMenuKey(arrowTarget, 'ArrowRight', 39);
     if (arrowTarget !== row.itemEl) {
       dispatchMenuKey(row.itemEl, 'ArrowRight', 39);
     }
+  }
+
+  async function openRowGenericSubmenu(parentPopup, row, excludePopups, excludeItems, maxPollFrames = 12) {
+    if (!parentPopup || !row || !row.itemEl || !row.itemEl.isConnected) {
+      return { containerEl: null, rows: [] };
+    }
+
+    await highlightAndArrowRightRow(parentPopup, row, excludeItems);
 
     for (let f = 0; f < maxPollFrames; f++) {
       await waitNextFrames(1);
-      const found = findEffortOptionsInSecondaryPopup(popup, mainTopItems, targetEffort);
+      const found = findSubmenuItemsInSecondaryPopup(excludePopups, excludeItems);
+      if (found.rows.length > 0) {
+        return found;
+      }
+    }
+
+    return findSubmenuItemsInSecondaryPopup(excludePopups, excludeItems);
+  }
+
+  // Highlight a model row and trigger its submenu via hover + ArrowRight without firing click
+  async function openRowEffortSubmenu(
+    popup,
+    row,
+    mainTopItems,
+    targetEffort = null,
+    maxPollFrames = 12,
+    excludePopups = null
+  ) {
+    if (!popup || !row || !row.itemEl || !row.itemEl.isConnected) {
+      return { containerEl: null, matchedEl: null, discoveredEfforts: [], entries: [] };
+    }
+
+    await highlightAndArrowRightRow(popup, row, mainTopItems);
+
+    for (let f = 0; f < maxPollFrames; f++) {
+      await waitNextFrames(1);
+      const found = findEffortOptionsInSecondaryPopup(popup, mainTopItems, targetEffort, excludePopups);
       if (found.discoveredEfforts.length >= 2) {
         return found;
       }
@@ -1425,7 +1675,7 @@
       }
     }
 
-    return findEffortOptionsInSecondaryPopup(popup, mainTopItems, targetEffort);
+    return findEffortOptionsInSecondaryPopup(popup, mainTopItems, targetEffort, excludePopups);
   }
 
   async function closeNativePopupCleanly(triggerBtn, popupEl) {
@@ -1511,8 +1761,9 @@
 
         const detectedGenerations = new Map();
         const activeRaw = readRawTriggerModelName(triggerBtn);
-        const activeParsed = parseModelLabel(activeRaw);
+        const activeParsed = parseActiveTriggerState(activeRaw);
         const rowsToProbe = [];
+        const compositeRowsToProbe = [];
 
         for (let i = 0; i < itemEls.length; i++) {
           const item = itemEls[i];
@@ -1541,6 +1792,11 @@
 
           registerModelEntry(parsed, isActive);
 
+          if (info.isComposite && info.hasSubmenu) {
+            compositeRowsToProbe.push(info);
+            continue;
+          }
+
           const baseLower = parsed.base.toLowerCase();
           if (
             info.hasEffortIndicator &&
@@ -1548,6 +1804,75 @@
             !catalogState.probedEffortsByBase.has(baseLower)
           ) {
             rowsToProbe.push(info);
+          }
+        }
+
+        // Always probe composite rows (such as Orchestrator) to discover live Level-2 sub-models
+        for (const compInfo of compositeRowsToProbe) {
+          if (!isPopupActuallyOpen(popup)) break;
+          const famKey = compInfo.parsed.shortLabel.toLowerCase();
+          const fam = catalogState.otherFamilies.get(famKey);
+          if (!fam) continue;
+
+          const subMenu = await openRowGenericSubmenu(popup, compInfo, new Set([popup]), mainTopItems, 10);
+          if (subMenu.rows.length > 0) {
+            const discoveredSubs = [];
+            const seenSubKeys = new Set();
+            for (const subRow of subMenu.rows) {
+              const sBase = subRow.parsed.base;
+              const sKey = sBase.toLowerCase();
+              if (seenSubKeys.has(sKey)) continue;
+              seenSubKeys.add(sKey);
+
+              let sTiers = resolveVerifiedEffortsForBase(sBase, subRow.currentEffort ? [subRow.currentEffort] : []);
+              if (sTiers.length < 2 && subRow.hasSubmenu && !hasAuthoritativeBackendCaps()) {
+                const subItemsSet = new Set(subMenu.rows.map((r) => r.itemEl));
+                const l3 = await openRowEffortSubmenu(
+                  subMenu.containerEl,
+                  subRow,
+                  subItemsSet,
+                  null,
+                  7,
+                  new Set([popup, subMenu.containerEl])
+                );
+                if (l3.discoveredEfforts.length >= 2) {
+                  catalogState.probedEffortsByBase.set(sKey, l3.discoveredEfforts);
+                  sTiers = l3.discoveredEfforts;
+                  dispatchMenuKey(l3.containerEl || subRow.itemEl, 'ArrowLeft', 37);
+                  await waitNextFrames(1);
+                }
+              }
+
+              discoveredSubs.push({
+                key: sKey,
+                base: sBase,
+                shortLabel: sBase,
+                currentEffort: subRow.currentEffort || null,
+                hasSubmenu: Boolean(subRow.hasSubmenu),
+                supportedEfforts: sTiers,
+                hasEffortControl: sTiers.length >= 2
+              });
+            }
+
+            if (discoveredSubs.length > 0) {
+              fam.subModels = discoveredSubs;
+              const activeSubHint = compInfo.parsed.activeSubModelBase;
+              const activeSubEff = compInfo.parsed.activeSubModelEffort;
+              const matchedSub = matchSubModelInFamily(fam, activeSubHint) || discoveredSubs[0];
+              fam.activeSubModelKey = matchedSub ? matchedSub.key : null;
+              if (matchedSub && activeSubEff) {
+                matchedSub.currentEffort = activeSubEff;
+              }
+            }
+
+            dispatchMenuKey(subMenu.containerEl || compInfo.itemEl, 'ArrowLeft', 37);
+            await waitNextFrames(1);
+          } else {
+            const prevFam = prevOthers.get(famKey);
+            if (prevFam && Array.isArray(prevFam.subModels) && prevFam.subModels.length > 0) {
+              fam.subModels = prevFam.subModels;
+              if (!fam.activeSubModelKey) fam.activeSubModelKey = prevFam.activeSubModelKey;
+            }
           }
         }
 
@@ -1607,8 +1932,9 @@
           }
         }
 
-        if (activeParsed) {
-          registerModelEntry(activeParsed, true);
+        const refreshedActiveParsed = parseActiveTriggerState(activeRaw);
+        if (refreshedActiveParsed) {
+          registerModelEntry(refreshedActiveParsed, true);
         }
 
         syncCatalogCapabilitiesFromKnownSources();
@@ -1705,6 +2031,101 @@
       if (matchingRows.length === 0) {
         await closeNativePopupCleanly(triggerBtn, popup);
         return false;
+      }
+
+      // Case 0: Composite nested-model selection (e.g. Orchestrator -> Gemini 4 Carbon -> High)
+      if (targetSpec.subModelBase) {
+        const compRow = matchingRows[0];
+        const level2 = await openRowGenericSubmenu(popup, compRow, new Set([popup]), mainTopItems, 14);
+        const wantSubLower = String(targetSpec.subModelBase).trim().toLowerCase();
+        const targetSubRow =
+          level2.rows.find((r) => r.parsed.base.toLowerCase() === wantSubLower) ||
+          level2.rows.find(
+            (r) =>
+              r.parsed.base.toLowerCase().includes(wantSubLower) ||
+              wantSubLower.includes(r.parsed.base.toLowerCase())
+          ) ||
+          level2.rows[0] ||
+          null;
+
+        let committed = false;
+        let appliedEffort = normTargetEffort || (targetSubRow ? targetSubRow.currentEffort : null);
+
+        if (targetSubRow && level2.containerEl) {
+          const level2ItemsSet = new Set(level2.rows.map((r) => r.itemEl));
+          const excludeL3 = new Set([popup, level2.containerEl]);
+          const desiredEffort =
+            normTargetEffort ||
+            catalogState.preferredSubEffortByKey.get(`${targetSpec.familyKey}::${wantSubLower}`) ||
+            targetSubRow.currentEffort ||
+            null;
+
+          if (targetSubRow.hasSubmenu || normTargetEffort) {
+            const level3 = await openRowEffortSubmenu(
+              level2.containerEl,
+              targetSubRow,
+              level2ItemsSet,
+              desiredEffort,
+              14,
+              excludeL3
+            );
+            if (level3.discoveredEfforts.length >= 2) {
+              catalogState.probedEffortsByBase.set(targetSubRow.parsed.base.toLowerCase(), level3.discoveredEfforts);
+            }
+
+            let pickEl = level3.matchedEl;
+            if (!pickEl && Array.isArray(level3.entries) && level3.entries.length > 0) {
+              const fallbackEntry =
+                level3.entries.find((e) => e.effort === desiredEffort) ||
+                level3.entries.find((e) => e.effort === 'Medium') ||
+                level3.entries[0];
+              if (fallbackEntry) {
+                pickEl = fallbackEntry.el;
+                appliedEffort = fallbackEntry.effort;
+              }
+            }
+
+            if (pickEl) {
+              await activateSubmenuEffortItem({ containerEl: level3.containerEl, matchedEl: pickEl });
+              committed = true;
+            }
+          }
+
+          if (!committed && targetSubRow.itemEl && targetSubRow.itemEl.isConnected && isPopupActuallyOpen(popup)) {
+            syntheticHoverHighlight(targetSubRow.itemEl);
+            await waitNextFrames(1);
+            syntheticActivate(targetSubRow.itemEl);
+            await waitNextFrames(2);
+            if (isPopupActuallyOpen(popup) && targetSubRow.itemEl.isConnected) {
+              isDispatchingInternal = true;
+              try {
+                targetSubRow.itemEl.click();
+              } finally {
+                isDispatchingInternal = false;
+              }
+              await waitNextFrames(2);
+            }
+            committed = true;
+          }
+        }
+
+        if (findOpenNativePopup(triggerBtn)) {
+          await closeNativePopupCleanly(triggerBtn, popup);
+        }
+
+        const fam = targetSpec.familyKey ? catalogState.otherFamilies.get(targetSpec.familyKey) : null;
+        if (fam) {
+          const matchedSub = matchSubModelInFamily(fam, targetSpec.subModelBase);
+          if (matchedSub) {
+            fam.activeSubModelKey = matchedSub.key;
+            if (appliedEffort) {
+              matchedSub.currentEffort = appliedEffort;
+              catalogState.preferredSubEffortByKey.set(`${fam.key}::${matchedSub.key}`, appliedEffort);
+            }
+          }
+          saveCatalogSnapshot();
+        }
+        return committed;
       }
 
       // Case 1: Flat separate rows per effort tier
@@ -1882,12 +2303,17 @@
   let inspectorNameEl = null;
   let effortGroupEl = null;
   let otherPillsWrapEl = null;
+  let subModelBarEl = null;
+  let subModelLabelEl = null;
+  let subModelListEl = null;
+  let subModelDividerEl = null;
+  let subModelEffortsEl = null;
   let viewUsageBtnEl = null;
   let usageViewEl = null;
   const tileBtnByZ = new Map();
   let activeTriggerBtn = null;
   let hoverIntentTimer = null;
-  let lockedSelection = null; // { isElement: true, elementZ } | { isElement: false, familyKey } | null
+  let lockedSelection = null; // { isElement: true, elementZ } | { isElement: false, familyKey, subModelKey? } | null
 
   function isPanelOpen() {
     if (!popoverEl || !popoverEl.isConnected) return false;
@@ -2146,6 +2572,171 @@
     }
   }
 
+  function resolveSelectedSubModelForFamily(fam, activeParsed = null) {
+    if (!fam || !Array.isArray(fam.subModels) || fam.subModels.length === 0) return null;
+    if (
+      lockedSelection &&
+      !lockedSelection.isElement &&
+      lockedSelection.familyKey === fam.key &&
+      lockedSelection.subModelKey
+    ) {
+      const hitLocked = matchSubModelInFamily(fam, lockedSelection.subModelKey);
+      if (hitLocked) return hitLocked;
+    }
+    if (
+      activeParsed &&
+      !activeParsed.isElement &&
+      activeParsed.shortLabel.toLowerCase() === fam.key &&
+      activeParsed.activeSubModelBase
+    ) {
+      const hitActive = matchSubModelInFamily(fam, activeParsed.activeSubModelBase);
+      if (hitActive) return hitActive;
+    }
+    if (fam.activeSubModelKey) {
+      const hitStored = matchSubModelInFamily(fam, fam.activeSubModelKey);
+      if (hitStored) return hitStored;
+    }
+    return fam.subModels[0] || null;
+  }
+
+  function renderSubModelBar(fam, activeParsed = null) {
+    if (!subModelBarEl || !subModelLabelEl || !subModelListEl || !subModelDividerEl || !subModelEffortsEl) return;
+
+    const wasOpen = subModelBarEl.getAttribute('data-open') === '1';
+    const hasSubs = Boolean(fam && Array.isArray(fam.subModels) && fam.subModels.length > 0);
+    if (!hasSubs) {
+      subModelBarEl.removeAttribute('data-open');
+      subModelListEl.textContent = '';
+      subModelEffortsEl.textContent = '';
+      if (wasOpen && isPanelOpen()) {
+        requestAnimationFrame(() => positionPanelNearTrigger(activeTriggerBtn));
+      }
+      return;
+    }
+
+    const selectedSub = resolveSelectedSubModelForFamily(fam, activeParsed);
+    subModelLabelEl.textContent = fam.shortLabel;
+    subModelListEl.textContent = '';
+    subModelEffortsEl.textContent = '';
+
+    for (const sub of fam.subModels) {
+      const isSubActive = Boolean(selectedSub && selectedSub.key === sub.key);
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'pt-submodel-chip';
+      chip.title = `${fam.shortLabel} · ${sub.base}`;
+      chip.setAttribute('aria-pressed', isSubActive ? 'true' : 'false');
+      if (isSubActive) {
+        chip.setAttribute('data-active', '1');
+        const dot = document.createElement('span');
+        dot.className = 'pt-other-pill-dot';
+        chip.appendChild(dot);
+      }
+      const txt = document.createElement('span');
+      txt.textContent = sub.shortLabel || sub.base;
+      chip.appendChild(txt);
+
+      chip.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const mode = resolveCloseMode();
+        const subTiers = Array.isArray(sub.supportedEfforts) ? sub.supportedEfforts : [];
+        const alreadyLockedOnThisSub = Boolean(
+          lockedSelection &&
+            !lockedSelection.isElement &&
+            lockedSelection.familyKey === fam.key &&
+            lockedSelection.subModelKey === sub.key
+        );
+
+        if (mode === 'effort' && subTiers.length >= 2 && !alreadyLockedOnThisSub) {
+          lockedSelection = { isElement: false, familyKey: fam.key, subModelKey: sub.key };
+          refreshPanelState();
+          const activeEff =
+            subModelEffortsEl && subModelEffortsEl.querySelector('.pt-effort-chip[data-active="1"], .pt-effort-chip');
+          if (activeEff && typeof activeEff.focus === 'function') {
+            try {
+              activeEff.focus({ preventScroll: true });
+            } catch (e) {}
+          }
+          return;
+        }
+
+        const prefEff =
+          catalogState.preferredSubEffortByKey.get(`${fam.key}::${sub.key}`) || sub.currentEffort || null;
+        const btn = activeTriggerBtn;
+        const keepOpen = mode === 'never';
+        closePeriodicPanel();
+        await applyModelSelectionToHost(btn, {
+          elementZ: null,
+          familyKey: fam.key,
+          base: fam.base,
+          subModelBase: sub.base,
+          effort: prefEff
+        });
+        refreshPanelState();
+        if (keepOpen && btn) {
+          await openPeriodicPanel(btn);
+        }
+      });
+
+      subModelListEl.appendChild(chip);
+    }
+
+    const subTiers = selectedSub && Array.isArray(selectedSub.supportedEfforts) ? selectedSub.supportedEfforts : [];
+    if (selectedSub && subTiers.length >= 2) {
+      subModelDividerEl.style.display = '';
+      subModelEffortsEl.style.display = 'inline-flex';
+      const isThisSubActiveInHost = Boolean(
+        activeParsed &&
+          !activeParsed.isElement &&
+          activeParsed.shortLabel.toLowerCase() === fam.key &&
+          activeParsed.activeSubModelBase &&
+          matchSubModelInFamily(fam, activeParsed.activeSubModelBase)?.key === selectedSub.key
+      );
+      const curEff =
+        (isThisSubActiveInHost && activeParsed.activeSubModelEffort) ||
+        catalogState.preferredSubEffortByKey.get(`${fam.key}::${selectedSub.key}`) ||
+        selectedSub.currentEffort ||
+        null;
+
+      for (const eff of subTiers) {
+        const chip = document.createElement('button');
+        chip.type = 'button';
+        chip.className = 'pt-effort-chip';
+        chip.textContent = EFFORT_SHORT[eff] || eff;
+        chip.title = `${fam.shortLabel} · ${selectedSub.base} (${eff})`;
+        if (curEff === eff) {
+          chip.setAttribute('data-active', '1');
+        }
+        chip.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          const btn = activeTriggerBtn;
+          const keepOpen = resolveCloseMode() === 'never';
+          closePeriodicPanel();
+          await applyModelSelectionToHost(btn, {
+            elementZ: null,
+            familyKey: fam.key,
+            base: fam.base,
+            subModelBase: selectedSub.base,
+            effort: eff
+          });
+          refreshPanelState();
+          if (keepOpen && btn) {
+            await openPeriodicPanel(btn);
+          }
+        });
+        subModelEffortsEl.appendChild(chip);
+      }
+    } else {
+      subModelDividerEl.style.display = 'none';
+      subModelEffortsEl.style.display = 'none';
+    }
+
+    subModelBarEl.setAttribute('data-open', '1');
+    if (!wasOpen && isPanelOpen()) {
+      requestAnimationFrame(() => positionPanelNearTrigger(activeTriggerBtn));
+    }
+  }
+
   function renderDefaultActiveInspector() {
     if (!inspectorEl) return;
     if (lockedSelection) {
@@ -2160,7 +2751,7 @@
       }
     }
     const activeRaw = activeTriggerBtn ? readRawTriggerModelName(activeTriggerBtn) : '';
-    const activeParsed = parseModelLabel(activeRaw);
+    const activeParsed = parseActiveTriggerState(activeRaw);
     if (!activeParsed) {
       inspectorEl.removeAttribute('data-visible');
       return;
@@ -2240,14 +2831,29 @@
   function renderInspectorForOtherFamily(fam) {
     if (!inspectorEl || !inspectorNameEl || !effortGroupEl || !fam) return;
 
-    const tiers = Array.isArray(fam.supportedEfforts) ? fam.supportedEfforts : [];
     effortGroupEl.textContent = '';
+
+    if (Array.isArray(fam.subModels) && fam.subModels.length > 0) {
+      const activeRaw = activeTriggerBtn ? readRawTriggerModelName(activeTriggerBtn) : '';
+      const activeParsed = parseActiveTriggerState(activeRaw);
+      const selectedSub = resolveSelectedSubModelForFamily(fam, activeParsed);
+      if (selectedSub) {
+        const effSuffix = selectedSub.currentEffort ? ` · ${EFFORT_SHORT[selectedSub.currentEffort] || selectedSub.currentEffort}` : '';
+        setInspectorTitleStrong(`${fam.base} · ${selectedSub.base}`, effSuffix);
+      } else {
+        setInspectorTitleStrong(fam.base);
+      }
+      inspectorEl.setAttribute('data-visible', '1');
+      return;
+    }
+
+    const tiers = Array.isArray(fam.supportedEfforts) ? fam.supportedEfforts : [];
     setInspectorTitleStrong(fam.base);
 
     // Only render effort chips if this model genuinely supports >= 2 effort tiers
     if (tiers.length >= 2) {
       const activeRaw = activeTriggerBtn ? readRawTriggerModelName(activeTriggerBtn) : '';
-      const activeParsed = parseModelLabel(activeRaw);
+      const activeParsed = parseActiveTriggerState(activeRaw);
       const isThisActive = Boolean(
         activeParsed && !activeParsed.isElement && activeParsed.shortLabel.toLowerCase() === fam.key
       );
@@ -2622,9 +3228,12 @@
     usageViewEl.className = 'pt-usage-view';
     cardEl.appendChild(usageViewEl);
 
-    // Bottom Footer: Other models + Native View Usage button
+    // Bottom Footer: Other models + Native View Usage button + Composite Sub-Model Tray
     const footer = document.createElement('div');
     footer.className = 'pt-footer';
+
+    const footerMain = document.createElement('div');
+    footerMain.className = 'pt-footer-main';
 
     const otherWrap = document.createElement('div');
     otherWrap.className = 'pt-other-wrap';
@@ -2638,7 +3247,7 @@
 
     otherWrap.appendChild(otherLabel);
     otherWrap.appendChild(otherPillsWrapEl);
-    footer.appendChild(otherWrap);
+    footerMain.appendChild(otherWrap);
 
     viewUsageBtnEl = document.createElement('button');
     viewUsageBtnEl.type = 'button';
@@ -2648,7 +3257,25 @@
       ev.stopPropagation();
       switchCardView('usage');
     });
-    footer.appendChild(viewUsageBtnEl);
+    footerMain.appendChild(viewUsageBtnEl);
+    footer.appendChild(footerMain);
+
+    subModelBarEl = document.createElement('div');
+    subModelBarEl.className = 'pt-submodel-bar';
+    subModelLabelEl = document.createElement('span');
+    subModelLabelEl.className = 'pt-submodel-label';
+    subModelListEl = document.createElement('div');
+    subModelListEl.className = 'pt-submodel-list';
+    subModelDividerEl = document.createElement('span');
+    subModelDividerEl.className = 'pt-submodel-divider';
+    subModelEffortsEl = document.createElement('div');
+    subModelEffortsEl.className = 'pt-submodel-efforts';
+
+    subModelBarEl.appendChild(subModelLabelEl);
+    subModelBarEl.appendChild(subModelListEl);
+    subModelBarEl.appendChild(subModelDividerEl);
+    subModelBarEl.appendChild(subModelEffortsEl);
+    footer.appendChild(subModelBarEl);
 
     cardEl.appendChild(footer);
     shadowRoot.appendChild(cardEl);
@@ -2730,7 +3357,7 @@
     cardEl.setAttribute('data-theme', resolveCardTheme());
 
     const activeRaw = activeTriggerBtn ? readRawTriggerModelName(activeTriggerBtn) : '';
-    const activeParsed = parseModelLabel(activeRaw);
+    const activeParsed = parseActiveTriggerState(activeRaw);
     if (activeParsed) {
       registerModelEntry(activeParsed, true);
     }
@@ -2789,19 +3416,42 @@
       }
     }
 
+    let expandedCompositeFam = null;
+    if (lockedSelection && !lockedSelection.isElement) {
+      const lockedFam = catalogState.otherFamilies.get(lockedSelection.familyKey);
+      if (lockedFam && Array.isArray(lockedFam.subModels) && lockedFam.subModels.length > 0) {
+        expandedCompositeFam = lockedFam;
+      }
+    } else if (!lockedSelection && activeParsed && !activeParsed.isElement) {
+      const activeFam = catalogState.otherFamilies.get(activeParsed.shortLabel.toLowerCase());
+      if (activeFam && Array.isArray(activeFam.subModels) && activeFam.subModels.length > 0) {
+        expandedCompositeFam = activeFam;
+      }
+    }
+
     if (otherPillsWrapEl) {
       otherPillsWrapEl.textContent = '';
       for (const fam of catalogState.otherFamilies.values()) {
+        const hasSubModels = Array.isArray(fam.subModels) && fam.subModels.length > 0;
+        const selectedSub = hasSubModels ? resolveSelectedSubModelForFamily(fam, activeParsed) : null;
         const pill = document.createElement('button');
         pill.type = 'button';
         pill.className = 'pt-other-pill';
-        pill.title = fam.base;
+        pill.title = selectedSub ? `${fam.base} · ${selectedSub.base}` : fam.base;
 
         const isLocked = Boolean(lockedSelection && !lockedSelection.isElement && lockedSelection.familyKey === fam.key);
         const isSelected = lockedSelection
           ? isLocked
           : Boolean(activeParsed && !activeParsed.isElement && activeParsed.shortLabel.toLowerCase() === fam.key);
+        const isExpanded = Boolean(expandedCompositeFam && expandedCompositeFam.key === fam.key);
 
+        if (hasSubModels) {
+          pill.setAttribute('data-has-submodels', '1');
+          pill.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+        }
+        if (isExpanded) {
+          pill.setAttribute('data-expanded', '1');
+        }
         if (isLocked) {
           pill.setAttribute('data-locked', '1');
         }
@@ -2816,6 +3466,22 @@
         txt.textContent = fam.shortLabel;
         pill.appendChild(txt);
 
+        if (hasSubModels) {
+          const caret = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+          caret.setAttribute('class', 'pt-pill-caret');
+          caret.setAttribute('viewBox', '0 0 12 12');
+          caret.setAttribute('fill', 'none');
+          caret.setAttribute('aria-hidden', 'true');
+          const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          path.setAttribute('d', 'M3 4.5L6 7.5L9 4.5');
+          path.setAttribute('stroke', 'currentColor');
+          path.setAttribute('stroke-width', '1.4');
+          path.setAttribute('stroke-linecap', 'round');
+          path.setAttribute('stroke-linejoin', 'round');
+          caret.appendChild(path);
+          pill.appendChild(caret);
+        }
+
         pill.addEventListener('mouseenter', () => {
           if (lockedSelection) return;
           if (hoverIntentTimer) {
@@ -2827,11 +3493,51 @@
 
         pill.addEventListener('click', async () => {
           const mode = resolveCloseMode();
-          const hasEfforts = Array.isArray(fam.supportedEfforts) && fam.supportedEfforts.length >= 2;
           const alreadyLockedHere = Boolean(
             lockedSelection && !lockedSelection.isElement && lockedSelection.familyKey === fam.key
           );
 
+          if (hasSubModels) {
+            if (!alreadyLockedHere) {
+              const initialSub = resolveSelectedSubModelForFamily(fam, activeParsed);
+              lockedSelection = {
+                isElement: false,
+                familyKey: fam.key,
+                subModelKey: initialSub ? initialSub.key : null
+              };
+              refreshPanelState();
+              const activeSubBtn =
+                subModelListEl && subModelListEl.querySelector('.pt-submodel-chip[data-active="1"], .pt-submodel-chip');
+              if (activeSubBtn && typeof activeSubBtn.focus === 'function') {
+                try {
+                  activeSubBtn.focus({ preventScroll: true });
+                } catch (e) {}
+              }
+              return;
+            }
+
+            const chosenSub = resolveSelectedSubModelForFamily(fam, activeParsed);
+            const prefSubEff = chosenSub
+              ? catalogState.preferredSubEffortByKey.get(`${fam.key}::${chosenSub.key}`) || chosenSub.currentEffort || null
+              : null;
+            const btn = activeTriggerBtn;
+            const keepOpen = mode === 'never';
+            closePeriodicPanel();
+            await applyModelSelectionToHost(btn, {
+              elementZ: null,
+              familyKey: fam.key,
+              base: fam.base,
+              subModelBase: chosenSub ? chosenSub.base : null,
+              effort: prefSubEff
+            });
+            refreshPanelState();
+            if (keepOpen && btn) {
+              await openPeriodicPanel(btn);
+            }
+            return;
+          }
+
+          const hasEfforts = Array.isArray(fam.supportedEfforts) && fam.supportedEfforts.length >= 2;
           if (mode === 'effort' && hasEfforts && !alreadyLockedHere) {
             lockedSelection = { isElement: false, familyKey: fam.key };
             refreshPanelState();
@@ -2864,6 +3570,8 @@
         otherPillsWrapEl.appendChild(pill);
       }
     }
+
+    renderSubModelBar(expandedCompositeFam, activeParsed);
 
     if (viewUsageBtnEl) {
       viewUsageBtnEl.textContent = catalogState.viewUsageLabel || 'View Usage';
@@ -3036,7 +3744,15 @@
         base: f.base,
         hasEffortControl: f.hasEffortControl,
         currentEffort: f.currentEffort,
-        supportedEfforts: f.supportedEfforts
+        supportedEfforts: f.supportedEfforts,
+        activeSubModelKey: f.activeSubModelKey || null,
+        subModels: Array.isArray(f.subModels)
+          ? f.subModels.map((s) => ({
+              base: s.base,
+              currentEffort: s.currentEffort,
+              supportedEfforts: s.supportedEfforts
+            }))
+          : []
       })),
       triggersFound: findAllModelTriggers().length
     }),

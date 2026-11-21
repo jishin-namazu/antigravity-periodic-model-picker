@@ -682,11 +682,17 @@ html[data-ag-pt-harvesting="1"] :is(
   box-shadow: 0 0 0 2px var(--el-border), 0 6px 16px var(--el-glow, rgba(0, 0, 0, 0.28));
 }
 
-/* Bottom Footer: Other models + View Usage */
+/* Bottom Footer: Other models + View Usage + Composite Sub-Model Tray */
 .pt-footer {
   margin-top: 14px;
   padding-top: 12px;
   border-top: 1px solid var(--pt-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pt-footer-main {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -764,6 +770,96 @@ html[data-ag-pt-harvesting="1"] :is(
   border-radius: 9999px;
   background: var(--pt-dot-released-color);
   flex-shrink: 0;
+}
+
+.pt-pill-caret {
+  width: 11px;
+  height: 11px;
+  opacity: 0.72;
+  flex-shrink: 0;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.pt-other-pill[data-expanded="1"] .pt-pill-caret {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+
+.pt-submodel-bar {
+  display: none;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px 9px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: var(--pt-surface-subtle);
+  border: 1px solid var(--pt-tile-border);
+}
+
+.pt-submodel-bar[data-open="1"] {
+  display: flex;
+}
+
+.pt-submodel-label {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--pt-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pt-submodel-list {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.pt-submodel-chip {
+  appearance: none;
+  height: 25px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  border: 1px solid var(--pt-pill-border);
+  background: var(--pt-pill-bg);
+  color: var(--pt-text-primary);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.13s ease, border-color 0.13s ease, color 0.13s ease;
+}
+
+.pt-submodel-chip:hover,
+.pt-submodel-chip:focus-visible {
+  background: var(--pt-pill-hover-bg);
+  border-color: var(--pt-pill-hover-border);
+  outline: none;
+}
+
+.pt-submodel-chip[data-active="1"] {
+  background: var(--pt-pill-selected-bg);
+  border-color: var(--pt-pill-selected-border);
+  color: var(--pt-pill-selected-fg);
+  font-weight: 600;
+}
+
+.pt-submodel-divider {
+  width: 1px;
+  height: 16px;
+  background: var(--pt-divider);
+  flex-shrink: 0;
+}
+
+.pt-submodel-efforts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
 }
 
 .pt-usage-btn {

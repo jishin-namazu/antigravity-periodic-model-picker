@@ -8,12 +8,12 @@
       "bytes": 32601
     },
     "runtime.js": {
-      "sha256": "3315b97ddd33c08fd17805aef03d4c178d267ddad7a23ef901872b850f5d0c8d",
-      "bytes": 109885
+      "sha256": "f90216596ca62806dc949aa87df6e7a72203925473c8e8fe241c1ce700625e21",
+      "bytes": 138609
     },
     "periodic.css": {
-      "sha256": "07bd6fc0df676785d1845a9f6bcbc72cf699c8efbcb163c4bf2ea76a9d18a927",
-      "bytes": 22927
+      "sha256": "84f21bd55e98c0b80e22a8176ead20e71b221b0810b0cac5dc2eea1a56708536",
+      "bytes": 24815
     }
   }
 }
