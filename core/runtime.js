@@ -3610,10 +3610,28 @@
   // ==========================================================================
   // 8. Event Interception & Real-Time Host Theme Observer
   // ==========================================================================
+  let suppressTriggerClickBtn = null;
+  let suppressTriggerClickAt = 0;
+
   const onDocPointerOrMouseDown = (ev) => {
     if (isDispatchingInternal || ev.button !== 0 || ev.altKey) return;
     const targetEl = ev.target && ev.target.closest ? ev.target.closest('button') : null;
     if (!targetEl || !isModelSelectorTrigger(targetEl)) return;
+
+    // On pointerdown (or mousedown fallback), native popover="auto" light-dismiss has not
+    // yet closed the popover on pointerup. Record and close immediately so the subsequent
+    // click event does not re-open the panel right after light-dismiss closes it.
+    const isPrimaryDown = ev.type === 'pointerdown' || typeof PointerEvent !== 'function';
+    if (isPrimaryDown) {
+      if (isPanelOpen() && activeTriggerBtn === targetEl) {
+        suppressTriggerClickBtn = targetEl;
+        suppressTriggerClickAt = Date.now();
+        closePeriodicPanel();
+      } else {
+        suppressTriggerClickBtn = null;
+        suppressTriggerClickAt = 0;
+      }
+    }
 
     ev.preventDefault();
     ev.stopPropagation();
@@ -3633,6 +3651,15 @@
     ev.preventDefault();
     ev.stopPropagation();
     ev.stopImmediatePropagation();
+
+    if (suppressTriggerClickBtn === targetEl && Date.now() - suppressTriggerClickAt < 2500) {
+      suppressTriggerClickBtn = null;
+      suppressTriggerClickAt = 0;
+      if (isPanelOpen()) closePeriodicPanel();
+      return;
+    }
+    suppressTriggerClickBtn = null;
+    suppressTriggerClickAt = 0;
 
     if (isPanelOpen() && activeTriggerBtn === targetEl) {
       closePeriodicPanel();
