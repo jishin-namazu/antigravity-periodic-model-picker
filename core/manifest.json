@@ -4,8 +4,8 @@
   "minNodeVersion": "22.0.0",
   "files": {
     "daemon.mjs": {
-      "sha256": "44e619ce7b9f23ad6c3c35c565e96a1a04b23d9abd7db16e2fddd85318cea122",
-      "bytes": 29919
+      "sha256": "6b65789fef923bb39eb419a94c3342afa30697b012974824b2bf560a8e78329d",
+      "bytes": 32601
     },
     "runtime.js": {
       "sha256": "3315b97ddd33c08fd17805aef03d4c178d267ddad7a23ef901872b850f5d0c8d",

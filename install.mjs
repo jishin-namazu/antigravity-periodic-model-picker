@@ -166,7 +166,7 @@ function buildDistZip(baseDir = __dirname) {
     'preview'
   ].filter((item) => fs.existsSync(path.join(baseDir, item)));
 
-  const skipNames = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini']);
+  const skipNames = new Set(['.DS_Store', 'Thumbs.db', 'desktop.ini', 'demo.mp4', 'cover-16x9.png', 'cover-4x3.png']);
   const entriesToPack = [];
   const collect = (relPosix) => {
     const full = path.join(baseDir, ...relPosix.split('/'));
@@ -371,6 +371,40 @@ async function inspectLiveWindow(env) {
   return { reachable: false, pages: 0, state: null };
 }
 
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err && err.code === 'EPERM';
+  }
+}
+
+function getRunningPeriodicDaemons() {
+  const tmpDir = os.tmpdir();
+  const list = [];
+  try {
+    for (const f of fs.readdirSync(tmpDir)) {
+      if (!f.startsWith('ag-periodic-model-daemon-') || !f.endsWith('.pid')) continue;
+      const pFile = path.join(tmpDir, f);
+      try {
+        const data = JSON.parse(fs.readFileSync(pFile, 'utf8'));
+        const pid = Number(data?.pid) || 0;
+        const alive = isPidAlive(pid);
+        list.push({
+          pidFile: f,
+          pid,
+          alive,
+          rootDir: data?.rootDir || null,
+          startedAt: data?.startedAt || null
+        });
+      } catch {}
+    }
+  } catch {}
+  return list;
+}
+
 function stopRunningPeriodicDaemon() {
   const tmpDir = os.tmpdir();
   try {
@@ -496,29 +530,98 @@ WantedBy=default.target
   if (process.platform === 'win32') {
     const localVbs = path.join(targetDir, 'AntigravityPeriodicModelDaemon.vbs');
     const escVbs = (s) => String(s).replace(/"/g, '""');
+    const escXml = (s) =>
+      String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const vbsContent = [
       'Set WshShell = CreateObject("WScript.Shell")',
       `WshShell.Run """${escVbs(process.execPath)}"" ""${escVbs(wrapperDaemon)}""", 0, False`
     ].join('\r\n');
-    fs.writeFileSync(localVbs, vbsContent, 'utf16le');
+    fs.writeFileSync(localVbs, '\uFEFF' + vbsContent, 'utf16le');
 
     let method = 'detached-spawn';
+    let startedByScheduler = false;
+    const tmpXml = path.join(os.tmpdir(), `ag-pt-task-${process.pid}-${Date.now()}.xml`);
     try {
-      const tr = `wscript.exe //B //NoLogo "${localVbs}"`;
-      const createRes = spawnSync(
+      const winUser =
+        process.env.USERDOMAIN && process.env.USERNAME
+          ? `${process.env.USERDOMAIN}\\${process.env.USERNAME}`
+          : os.userInfo().username;
+      const taskXml = `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>${escXml(winUser)}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>${escXml(winUser)}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>//B //NoLogo "${escXml(localVbs)}"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+`;
+      fs.writeFileSync(tmpXml, '\uFEFF' + taskXml, 'utf16le');
+
+      let createRes = spawnSync(
         'schtasks',
-        ['/Create', '/TN', 'AntigravityPeriodicModelDaemon', '/SC', 'ONLOGON', '/TR', tr, '/F'],
+        ['/Create', '/TN', 'AntigravityPeriodicModelDaemon', '/XML', tmpXml, '/F'],
         { stdio: 'ignore', windowsHide: true, timeout: 6000 }
       );
+      if (createRes.status !== 0) {
+        const tr = `wscript.exe //B //NoLogo "${localVbs}"`;
+        createRes = spawnSync(
+          'schtasks',
+          ['/Create', '/TN', 'AntigravityPeriodicModelDaemon', '/SC', 'ONLOGON', '/TR', tr, '/F'],
+          { stdio: 'ignore', windowsHide: true, timeout: 6000 }
+        );
+      }
+
       if (createRes.status === 0) {
         method = 'schtasks';
-        spawnSync('schtasks', ['/Run', '/TN', 'AntigravityPeriodicModelDaemon'], {
+        const runRes = spawnSync('schtasks', ['/Run', '/TN', 'AntigravityPeriodicModelDaemon'], {
           stdio: 'ignore',
           windowsHide: true,
           timeout: 5000
         });
+        if (runRes.status === 0) {
+          const waitUntil = Date.now() + 1800;
+          const waitBuf = new Int32Array(new SharedArrayBuffer(4));
+          while (Date.now() < waitUntil) {
+            if (getRunningPeriodicDaemons().some((d) => d.alive)) {
+              startedByScheduler = true;
+              break;
+            }
+            Atomics.wait(waitBuf, 0, 0, 120);
+          }
+        }
       }
-    } catch {}
+    } catch {} finally {
+      try {
+        if (fs.existsSync(tmpXml)) fs.unlinkSync(tmpXml);
+      } catch {}
+    }
 
     if (method !== 'schtasks') {
       try {
@@ -541,16 +644,28 @@ WantedBy=default.target
       } catch {}
     }
 
-    try {
-      const child = spawn(process.execPath, [wrapperDaemon], {
-        detached: true,
-        stdio: 'ignore',
-        windowsHide: true
-      });
-      child.unref();
-    } catch {}
+    // Only spawn a direct fallback if Task Scheduler did not already launch an independent daemon
+    if (!startedByScheduler) {
+      try {
+        const child = spawn('wscript.exe', ['//B', '//NoLogo', localVbs], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        child.unref();
+      } catch {
+        try {
+          const child = spawn(process.execPath, [wrapperDaemon], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true
+          });
+          child.unref();
+        } catch {}
+      }
+    }
 
-    return { platform: 'win32', method, serviceFile: localVbs };
+    return { platform: 'win32', method, startedByScheduler, serviceFile: localVbs };
   }
 
   return { platform: process.platform, method: 'none' };
@@ -561,6 +676,7 @@ async function runDoctor() {
   const targetDir = path.resolve(getArg('--target-dir', resolveDefaultTargetDir()));
   const env = detectEnvironment(channel);
   const integrity = verifyCoreIntegrity(targetDir);
+  const daemons = getRunningPeriodicDaemons();
   const live = await inspectLiveWindow(env);
 
   console.log(
@@ -568,6 +684,10 @@ async function runDoctor() {
       {
         ok: env.nodeBasicOk && integrity.ok,
         targetDir,
+        daemon: {
+          alive: daemons.some((d) => d.alive),
+          instances: daemons
+        },
         environment: env,
         coreIntegrity: integrity,
         liveWindow: live
@@ -667,10 +787,15 @@ async function runInstall() {
       const d = path.join(targetDir, doc);
       if (fs.existsSync(s)) fs.copyFileSync(s, d);
     }
-    for (const sub of ['assets', 'skills', 'preview']) {
+    for (const sub of ['skills', 'preview']) {
       const s = path.join(__dirname, sub);
       const d = path.join(targetDir, sub);
       if (fs.existsSync(s)) copyDirRecursive(s, d);
+    }
+    const srcScreenshot = path.join(__dirname, 'assets', 'screenshot.png');
+    if (fs.existsSync(srcScreenshot)) {
+      fs.mkdirSync(path.join(targetDir, 'assets'), { recursive: true });
+      fs.copyFileSync(srcScreenshot, path.join(targetDir, 'assets', 'screenshot.png'));
     }
   }
 
@@ -679,6 +804,7 @@ async function runInstall() {
   let serviceInfo = { skipped: true };
 
   if (!isSandbox) {
+    stopRunningPeriodicDaemon();
     argvStatus = ensureArgvRemoteDebugging(channel);
     const scriptsDir = path.join(os.homedir(), '.gemini', 'antigravity', 'scripts');
     fs.mkdirSync(scriptsDir, { recursive: true });
@@ -693,6 +819,7 @@ async function runInstall() {
     spawnSync(process.execPath, [realDaemon, '--once'], { stdio: 'inherit' });
   }
 
+  const daemons = isSandbox ? [] : getRunningPeriodicDaemons();
   const live = isSandbox ? { skipped: true } : await inspectLiveWindow(env);
   console.log(
     '\n[Install Complete]',
@@ -701,6 +828,10 @@ async function runInstall() {
         ok: true,
         targetDir,
         backupCreated,
+        daemon: {
+          alive: daemons.some((d) => d.alive),
+          instances: daemons
+        },
         argvStatus,
         serviceInfo,
         liveWindow: live
@@ -723,6 +854,7 @@ async function runVerify() {
 
   spawnSync(process.execPath, dArgs, { stdio: 'inherit' });
   const env = detectEnvironment(channel);
+  const daemons = getRunningPeriodicDaemons();
   const live = await inspectLiveWindow(env);
   console.log(
     JSON.stringify(
@@ -730,6 +862,7 @@ async function runVerify() {
         ok: Boolean(live.reachable && (live.state?.ready || live.pages === 0)),
         version: live.state?.version || null,
         pickerReady: Boolean(live.state?.ready),
+        daemonAlive: daemons.some((d) => d.alive),
         safeMode,
         live
       },

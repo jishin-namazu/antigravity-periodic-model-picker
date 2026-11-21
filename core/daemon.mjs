@@ -38,6 +38,32 @@ const SAFE_MODE = hasFlag('--safe-mode');
 const RUN_ONCE = hasFlag('--once');
 const CLI_CHANNEL = getArg('--channel', null);
 const BASE_VERSION = '20261119-v1.0';
+const LOG_FILE = path.join(ROOT_DIR, 'daemon.log');
+
+function logLine(msg) {
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  console.log(line);
+  if (RUN_ONCE) return;
+  try {
+    if (fs.existsSync(LOG_FILE)) {
+      const st = fs.statSync(LOG_FILE);
+      if (st.size > 32768) {
+        const tail = fs.readFileSync(LOG_FILE, 'utf8').slice(-16384);
+        fs.writeFileSync(LOG_FILE, tail, 'utf8');
+      }
+    }
+    fs.appendFileSync(LOG_FILE, line + '\n', 'utf8');
+  } catch {}
+}
+
+if (!RUN_ONCE) {
+  process.on('unhandledRejection', (err) => {
+    logLine(`[PeriodicModelDaemon] Ignored unhandledRejection: ${err?.message || String(err)}`);
+  });
+  process.on('uncaughtException', (err) => {
+    logLine(`[PeriodicModelDaemon] Ignored uncaughtException: ${err?.message || String(err)}`);
+  });
+}
 
 function readJsonSafe(filePath, fallback = {}) {
   try {
@@ -232,19 +258,27 @@ async function fetchBackendData(forceRefresh = false) {
     return cachedBackendPayload;
   }
 
+  const queryEndpoint = async (endpoint) =>
+    Promise.all([
+      postLsConnectRpc(endpoint, 'GetAvailableModels', {}, 3000).catch(() => null),
+      postLsConnectRpc(endpoint, 'RetrieveUserQuotaSummary', { forceRefresh: Boolean(forceRefresh) }, 4500).catch(() => null),
+      postLsConnectRpc(endpoint, 'GetUserStatus', {}, 2500).catch(() => null)
+    ]);
+
   let ep = await discoverLanguageServerEndpoint(false);
   if (!ep) return cachedBackendPayload;
 
   try {
-    const [modelsRes, quotaRes, userRes] = await Promise.all([
-      postLsConnectRpc(ep, 'GetAvailableModels', {}, 3000).catch(() => null),
-      postLsConnectRpc(ep, 'RetrieveUserQuotaSummary', { forceRefresh: Boolean(forceRefresh) }, 4500).catch(() => null),
-      postLsConnectRpc(ep, 'GetUserStatus', {}, 2500).catch(() => null)
-    ]);
+    let [modelsRes, quotaRes, userRes] = await queryEndpoint(ep);
 
     if (!modelsRes && !quotaRes && !userRes) {
+      cachedLsEndpoint = null;
       ep = await discoverLanguageServerEndpoint(true);
       if (!ep) return cachedBackendPayload;
+      [modelsRes, quotaRes, userRes] = await queryEndpoint(ep);
+      if (!modelsRes && !quotaRes && !userRes) {
+        return cachedBackendPayload;
+      }
     }
 
     const rawModels = modelsRes?.response?.models || modelsRes?.models || {};
@@ -663,94 +697,131 @@ function attachTarget(target, endpoint) {
             clearTimeout(timer);
             res(msg);
           });
-          ws.send(JSON.stringify({ id, method, params }));
+          try {
+            ws.send(JSON.stringify({ id, method, params }));
+          } catch {
+            clearTimeout(timer);
+            pending.delete(id);
+            res(null);
+          }
         });
 
       const pushBackendData = async (forceRefresh = false) => {
-        const data = await fetchBackendData(forceRefresh);
-        if (!data || ws.readyState !== WebSocket.OPEN) return;
-        await send('Runtime.evaluate', {
-          expression: `window.__ag_pt_receive_backend && window.__ag_pt_receive_backend(${JSON.stringify(data)})`,
-          returnByValue: false
-        });
+        try {
+          const data = await fetchBackendData(forceRefresh);
+          if (!data || ws.readyState !== WebSocket.OPEN) return;
+          await send('Runtime.evaluate', {
+            expression: `window.__ag_pt_receive_backend && window.__ag_pt_receive_backend(${JSON.stringify(data)})`,
+            returnByValue: false
+          });
+        } catch {}
       };
 
       const updateNewDocScript = async () => {
-        if (evalScriptId) {
-          try {
-            await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: evalScriptId });
-          } catch {}
-          evalScriptId = null;
-        }
-        if (activeConfig.enabled && cachedInjectScript) {
-          const added = await send('Page.addScriptToEvaluateOnNewDocument', {
-            source: cachedInjectScript
-          });
-          evalScriptId = added?.result?.identifier || null;
-        }
+        try {
+          if (evalScriptId) {
+            try {
+              await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: evalScriptId });
+            } catch {}
+            evalScriptId = null;
+          }
+          if (activeConfig.enabled && cachedInjectScript) {
+            const added = await send('Page.addScriptToEvaluateOnNewDocument', {
+              source: cachedInjectScript
+            });
+            evalScriptId = added?.result?.identifier || null;
+          }
+        } catch {}
       };
 
       const inject = async () => {
-        if (!cachedInjectScript) return false;
-        const res = await send('Runtime.evaluate', {
-          expression: cachedInjectScript,
-          returnByValue: false
-        });
-        const ok = Boolean(res && !res.error && !res.result?.exceptionDetails);
-        if (ok && activeConfig.enabled) {
-          await pushBackendData(false);
+        try {
+          if (!cachedInjectScript) return false;
+          const res = await send('Runtime.evaluate', {
+            expression: cachedInjectScript,
+            returnByValue: false
+          });
+          const ok = Boolean(res && !res.error && !res.result?.exceptionDetails);
+          if (ok && activeConfig.enabled) {
+            await pushBackendData(false);
+          }
+          return ok;
+        } catch {
+          return false;
         }
-        return ok;
       };
 
       const checkAndInject = async () => {
-        const res = await send('Runtime.evaluate', {
-          expression: `({
-            injected: window.__ag_pt_version === ${JSON.stringify(cachedPatchVersion)} && (${JSON.stringify(!activeConfig.enabled)} || window.__ag_pt_ready === true),
-            kind: ${HOST_PROBE_EXPRESSION}
-          })`,
-          returnByValue: true
-        });
-        const val = res?.result?.result?.value;
-        if (!val || val.kind === 'non_host') {
-          skippedTargets.set(target.id, target.url);
-          try {
-            ws.close();
-          } catch {}
-          return;
-        }
-        if (val.kind === 'host' && !val.injected) {
-          await inject();
-        }
+        try {
+          const res = await send('Runtime.evaluate', {
+            expression: `({
+              injected: window.__ag_pt_version === ${JSON.stringify(cachedPatchVersion)} && (${JSON.stringify(!activeConfig.enabled)} || window.__ag_pt_ready === true),
+              kind: ${HOST_PROBE_EXPRESSION}
+            })`,
+            returnByValue: true
+          });
+          const val = res?.result?.result?.value;
+          if (!val) return;
+          if (val.kind === 'non_host') {
+            if (target.url && target.url !== 'about:blank') {
+              skippedTargets.set(target.id, target.url);
+            }
+            try {
+              ws.close();
+            } catch {}
+            return;
+          }
+          if (val.kind === 'host' && !val.injected) {
+            await inject();
+          }
+        } catch {}
       };
 
       ws.addEventListener('open', async () => {
-        await send('Runtime.enable');
-        const probeRes = await send('Runtime.evaluate', {
-          expression: HOST_PROBE_EXPRESSION,
-          returnByValue: true
-        });
-        const kind = probeRes?.result?.result?.value;
-        if (kind === 'non_host') {
-          skippedTargets.set(target.id, target.url);
+        try {
+          await send('Runtime.enable');
+          const probeRes = await send('Runtime.evaluate', {
+            expression: HOST_PROBE_EXPRESSION,
+            returnByValue: true
+          });
+          const kind = probeRes?.result?.result?.value;
+          if (!kind) {
+            clearTimeout(timeout);
+            try {
+              ws.close();
+            } catch {}
+            finish(false);
+            return;
+          }
+          if (kind === 'non_host') {
+            if (target.url && target.url !== 'about:blank') {
+              skippedTargets.set(target.id, target.url);
+            }
+            clearTimeout(timeout);
+            try {
+              ws.close();
+            } catch {}
+            finish(false);
+            return;
+          }
+
+          hostConfirmed = true;
+          await send('Page.enable');
+          await send('Runtime.addBinding', { name: '__agPtRequestBackend' });
+          await updateNewDocScript();
+          const ok = await inject();
+          clearTimeout(timeout);
+          logLine(
+            `[PeriodicModelDaemon] Injected target ${target.id} (${target.title || 'Antigravity'}) [${endpoint.channel}]`
+          );
+          finish(ok);
+        } catch {
           clearTimeout(timeout);
           try {
             ws.close();
           } catch {}
           finish(false);
-          return;
         }
-
-        hostConfirmed = true;
-        await send('Page.enable');
-        await send('Runtime.addBinding', { name: '__agPtRequestBackend' });
-        await updateNewDocScript();
-        const ok = await inject();
-        clearTimeout(timeout);
-        console.log(
-          `[PeriodicModelDaemon] Injected target ${target.id} (${target.title || 'Antigravity'}) [${endpoint.channel}]`
-        );
-        finish(ok);
       });
 
       ws.addEventListener('message', (event) => {
@@ -768,7 +839,7 @@ function attachTarget(target, endpoint) {
               const p = JSON.parse(msg.params.payload || '{}');
               force = Boolean(p.forceRefresh);
             } catch {}
-            void pushBackendData(force);
+            void pushBackendData(force).catch(() => {});
             return;
           }
           if (
@@ -779,7 +850,7 @@ function attachTarget(target, endpoint) {
           ) {
             if (!msg.params?.frame?.parentId) {
               setTimeout(() => {
-                void checkAndInject();
+                void checkAndInject().catch(() => {});
               }, 120);
             }
           }
@@ -792,6 +863,9 @@ function attachTarget(target, endpoint) {
         pending.clear();
         if (attachedTargets.get(target.id)?.ws === ws) {
           attachedTargets.delete(target.id);
+        }
+        if (attachedTargets.size === 0) {
+          cachedLsEndpoint = null;
         }
         finish(false);
       };
@@ -830,6 +904,7 @@ async function sync() {
     const shouldHeartbeat = bundleChanged || syncTick % 6 === 1;
     const shouldRefreshQuota = syncTick % 12 === 1;
     const activeIds = new Set();
+    const seenTargetIds = new Set();
     const probedPorts = new Set();
     const now = Date.now();
 
@@ -849,8 +924,12 @@ async function sync() {
       ) {
         probedPorts.add(ep.fallbackPort);
         targets = await fetchTargets(ep.fallbackPort);
-        if (targets.length === 0) fallbackBackoff.set(ep.fallbackPort, now + 10000);
+        if (targets.length === 0) fallbackBackoff.set(ep.fallbackPort, now + 3000);
         else fallbackBackoff.delete(ep.fallbackPort);
+      }
+
+      for (const t of targets) {
+        if (t && t.id) seenTargetIds.add(t.id);
       }
 
       const pages = targets.filter(
@@ -885,6 +964,12 @@ async function sync() {
       }
     }
 
+    for (const id of Array.from(skippedTargets.keys())) {
+      if (!seenTargetIds.has(id)) {
+        skippedTargets.delete(id);
+      }
+    }
+
     for (const [id, entry] of attachedTargets.entries()) {
       if (!activeIds.has(id)) {
         try {
@@ -893,14 +978,19 @@ async function sync() {
         attachedTargets.delete(id);
       }
     }
+    if (attachedTargets.size === 0) {
+      cachedLsEndpoint = null;
+    }
+  } catch (err) {
+    logLine(`[PeriodicModelDaemon] sync error: ${err?.message || String(err)}`);
   } finally {
     isSyncing = false;
   }
 }
 
 await rebuildBundleIfNeeded();
-console.log(
-  `[PeriodicModelDaemon] Started (${cachedPatchVersion}) | channel=${activeConfig.channel} | safeMode=${SAFE_MODE}`
+logLine(
+  `[PeriodicModelDaemon] Started (${cachedPatchVersion}) | pid=${process.pid} | root=${ROOT_DIR} | channel=${activeConfig.channel} | safeMode=${SAFE_MODE}`
 );
 
 await sync();
@@ -912,5 +1002,7 @@ if (RUN_ONCE) {
   }
   process.exit(0);
 } else {
-  setInterval(sync, 2500);
+  setInterval(() => {
+    void sync().catch(() => {});
+  }, 2500);
 }
